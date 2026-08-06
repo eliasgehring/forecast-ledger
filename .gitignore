@@ -1,0 +1,26 @@
+# Virtual environment
+.venv/
+
+# Secrets
+.env
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Testing and tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local database files
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# macOS
+.DS_Storegit status
