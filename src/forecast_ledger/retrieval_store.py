@@ -168,6 +168,8 @@ def finish_retrieval_attempt_failure(
     completed_at: datetime,
     error_type: str,
     error_message: str,
+    response_id: str | None = None,
+    raw_output: str | None = None,
     protocol_version: str = PROTOCOL_VERSION,
 ) -> None:
     require_timezone_aware(
@@ -180,9 +182,11 @@ def finish_retrieval_attempt_failure(
         UPDATE retrieval_attempts
         SET
             completed_at = ?,
+            response_id = ?,
             status = ?,
             error_type = ?,
-            error_message = ?
+            error_message = ?,
+            raw_output = ?
         WHERE market_id = ?
           AND checkpoint = ?
           AND protocol_version = ?
@@ -191,9 +195,11 @@ def finish_retrieval_attempt_failure(
         """,
         (
             completed_at.isoformat(),
+            response_id,
             RetrievalAttemptStatus.FAILED.value,
             error_type,
             error_message,
+            raw_output,
             market_id,
             checkpoint.value,
             protocol_version,

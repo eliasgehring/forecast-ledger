@@ -31,6 +31,19 @@ class RetrievalResponse:
     raw_output: str
     retrieved_at: datetime
     candidates: tuple[RetrievalCandidate, ...]
+    source_urls: tuple[str, ...] = ()
+
+
+class RetrievalOutputError(ValueError):
+    def __init__(
+        self,
+        message: str,
+        response_id: str,
+        raw_output: str,
+    ) -> None:
+        super().__init__(message)
+        self.response_id = response_id
+        self.raw_output = raw_output
 
 
 def build_retrieval_prompt(
@@ -219,6 +232,71 @@ def parse_retrieval_output(
     return tuple(candidates)
 
 
+def extract_web_search_source_urls(
+    response_payload: dict[str, Any],
+) -> tuple[str, ...]:
+    urls: list[str] = []
+
+    output = response_payload.get("output", [])
+
+    if not isinstance(output, list):
+        return ()
+
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+
+        if item.get("type") != "web_search_call":
+            continue
+
+        action = item.get("action")
+
+        if not isinstance(action, dict):
+            continue
+
+        sources = action.get("sources", [])
+
+        if not isinstance(sources, list):
+            continue
+
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+
+            url = source.get("url")
+
+            if isinstance(url, str) and url:
+                urls.append(url)
+
+    return tuple(dict.fromkeys(urls))
+
+
+def _source_key(url: str) -> tuple[str, str]:
+    parsed = urlparse(url)
+
+    return (
+        parsed.netloc.lower(),
+        parsed.path.rstrip("/") or "/",
+    )
+
+
+def validate_candidate_sources(
+    candidates: tuple[RetrievalCandidate, ...],
+    source_urls: tuple[str, ...],
+) -> None:
+    source_keys = {
+        _source_key(url)
+        for url in source_urls
+    }
+
+    for candidate in candidates:
+        if _source_key(candidate.source_url) not in source_keys:
+            raise ValueError(
+                "Retrieval candidate URL was not present "
+                "in the web-search source list."
+            )
+
+
 def retrieve_evidence(
     client: OpenAI,
     model: str,
@@ -239,27 +317,50 @@ def retrieve_evidence(
                 "type": "web_search",
             }
         ],
+        include=[
+            "web_search_call.action.sources",
+        ],
         input=prompt,
     )
 
     retrieved_at = datetime.now(UTC)
-
-    raw_output = response.output_text
+    raw_output = response.output_text or ""
 
     if not raw_output:
-        raise ValueError(
-            "Retrieval response contained no output text."
+        raise RetrievalOutputError(
+            "Retrieval response contained no output text.",
+            response_id=response.id,
+            raw_output=raw_output,
         )
 
-    candidates = parse_retrieval_output(
-        raw_output
+    response_payload = response.model_dump()
+
+    source_urls = extract_web_search_source_urls(
+        response_payload
     )
+
+    try:
+        candidates = parse_retrieval_output(
+            raw_output
+        )
+
+        validate_candidate_sources(
+            candidates,
+            source_urls,
+        )
+    except (TypeError, ValueError) as exc:
+        raise RetrievalOutputError(
+            str(exc),
+            response_id=response.id,
+            raw_output=raw_output,
+        ) from exc
 
     return RetrievalResponse(
         response_id=response.id,
         raw_output=raw_output,
         retrieved_at=retrieved_at,
         candidates=candidates,
+        source_urls=source_urls,
     )
 
 
