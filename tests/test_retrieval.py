@@ -6,10 +6,10 @@ import pytest
 from forecast_ledger.domain import TimestampQuality
 from forecast_ledger.retrieval import (
     RetrievalResponse,
-    accepted_evidence_items,
     build_retrieval_prompt,
     parse_publication_time,
     parse_retrieval_output,
+    verified_evidence_items,
 )
 
 CUTOFF = datetime(
@@ -82,8 +82,8 @@ def test_date_only_is_conservatively_end_of_day() -> None:
     )
 
 
-def test_future_evidence_is_removed_after_retrieval() -> None:
-    retrieval = RetrievalResponse(
+def _single_candidate_retrieval() -> RetrievalResponse:
+    return RetrievalResponse(
         response_id="resp-1",
         raw_output="{}",
         retrieved_at=datetime(
@@ -99,62 +99,13 @@ def test_future_evidence_is_removed_after_retrieval() -> None:
                 {
                     "evidence": [
                         {
-                            "source_url": "https://example.com/past",
+                            "source_url": "https://example.com/a",
                             "source_name": "Example",
-                            "title": "Past",
-                            "published_at": (
-                                "2026-08-07T10:00:00+00:00"
-                            ),
-                            "timestamp_quality": "verified",
-                            "excerpt": "Past evidence.",
-                        },
-                        {
-                            "source_url": "https://example.com/future",
-                            "source_name": "Example",
-                            "title": "Future",
+                            "title": "Example",
                             "published_at": (
                                 "2026-08-07T12:00:00+00:00"
                             ),
                             "timestamp_quality": "verified",
-                            "excerpt": "Future evidence.",
-                        },
-                    ]
-                }
-            )
-        ),
-    )
-
-    accepted = accepted_evidence_items(
-        retrieval,
-        CUTOFF,
-    )
-
-    assert len(accepted) == 1
-    assert accepted[0].title == "Past"
-
-
-def test_same_day_date_only_evidence_is_rejected_before_midnight() -> None:
-    retrieval = RetrievalResponse(
-        response_id="resp-1",
-        raw_output="{}",
-        retrieved_at=datetime(
-            2026,
-            8,
-            7,
-            11,
-            10,
-            tzinfo=UTC,
-        ),
-        candidates=parse_retrieval_output(
-            json.dumps(
-                {
-                    "evidence": [
-                        {
-                            "source_url": "https://example.com/a",
-                            "source_name": "Example",
-                            "title": "Same day",
-                            "published_at": "2026-08-07",
-                            "timestamp_quality": "date_only",
                             "excerpt": "Evidence.",
                         }
                     ]
@@ -163,19 +114,15 @@ def test_same_day_date_only_evidence_is_rejected_before_midnight() -> None:
         ),
     )
 
-    accepted = accepted_evidence_items(
-        retrieval,
-        CUTOFF,
-    )
 
-    assert accepted == ()
+def test_verified_source_timestamp_overrides_model_timestamp() -> None:
+    from forecast_ledger.source_verification import VerifiedSource
 
+    retrieval = _single_candidate_retrieval()
 
-def test_unknown_timestamp_is_removed() -> None:
-    retrieval = RetrievalResponse(
-        response_id="resp-1",
-        raw_output="{}",
-        retrieved_at=datetime(
+    source = VerifiedSource(
+        source_url="https://example.com/a",
+        fetched_at=datetime(
             2026,
             8,
             7,
@@ -183,30 +130,69 @@ def test_unknown_timestamp_is_removed() -> None:
             10,
             tzinfo=UTC,
         ),
-        candidates=parse_retrieval_output(
-            json.dumps(
-                {
-                    "evidence": [
-                        {
-                            "source_url": "https://example.com/a",
-                            "source_name": "Example",
-                            "title": "Unknown",
-                            "published_at": (
-                                "2026-08-01T00:00:00+00:00"
-                            ),
-                            "timestamp_quality": "unknown",
-                            "excerpt": "Evidence.",
-                        }
-                    ]
-                }
-            )
+        content_sha256="abc",
+        published_at=datetime(
+            2026,
+            8,
+            7,
+            10,
+            0,
+            tzinfo=UTC,
         ),
+        timestamp_quality=TimestampQuality.VERIFIED,
+        verification_method="jsonld:datePublished",
+        error=None,
     )
 
-    assert accepted_evidence_items(
+    items, audits = verified_evidence_items(
         retrieval,
         CUTOFF,
-    ) == ()
+        fetcher=lambda _: source,
+    )
+
+    assert len(items) == 1
+    assert items[0].published_at == source.published_at
+    assert items[0].published_at != retrieval.candidates[0].published_at
+    assert audits[0].accepted is True
+
+
+def test_verified_future_source_is_rejected() -> None:
+    from forecast_ledger.source_verification import VerifiedSource
+
+    retrieval = _single_candidate_retrieval()
+
+    source = VerifiedSource(
+        source_url="https://example.com/a",
+        fetched_at=datetime(
+            2026,
+            8,
+            7,
+            11,
+            10,
+            tzinfo=UTC,
+        ),
+        content_sha256="abc",
+        published_at=datetime(
+            2026,
+            8,
+            7,
+            12,
+            0,
+            tzinfo=UTC,
+        ),
+        timestamp_quality=TimestampQuality.VERIFIED,
+        verification_method="jsonld:datePublished",
+        error=None,
+    )
+
+    items, audits = verified_evidence_items(
+        retrieval,
+        CUTOFF,
+        fetcher=lambda _: source,
+    )
+
+    assert items == ()
+    assert audits[0].accepted is False
 
 
 def test_malformed_json_is_rejected() -> None:

@@ -1,5 +1,6 @@
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
 from typing import Any
@@ -10,6 +11,10 @@ from openai import OpenAI
 from forecast_ledger.domain import (
     EvidenceItem,
     TimestampQuality,
+)
+from forecast_ledger.source_verification import (
+    VerifiedSource,
+    fetch_and_verify_source,
 )
 
 RETRIEVAL_PROMPT_VERSION = "retrieval-v0.1"
@@ -32,6 +37,15 @@ class RetrievalResponse:
     retrieved_at: datetime
     candidates: tuple[RetrievalCandidate, ...]
     source_urls: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class CandidateVerification:
+    position: int
+    candidate: RetrievalCandidate
+    source: VerifiedSource
+    accepted: bool
+    rejection_reason: str | None
 
 
 class RetrievalOutputError(ValueError):
@@ -359,45 +373,82 @@ def retrieve_evidence(
     )
 
 
-def accepted_evidence_items(
+def verified_evidence_items(
     retrieval: RetrievalResponse,
     information_cutoff: datetime,
-) -> tuple[EvidenceItem, ...]:
+    fetcher: Callable[[str], VerifiedSource] = fetch_and_verify_source,
+) -> tuple[
+    tuple[EvidenceItem, ...],
+    tuple[CandidateVerification, ...],
+]:
     accepted: list[EvidenceItem] = []
+    verifications: list[CandidateVerification] = []
 
     for index, candidate in enumerate(
         retrieval.candidates
     ):
-        if (
-            candidate.timestamp_quality
+        source = fetcher(candidate.source_url)
+
+        rejection_reason: str | None = None
+
+        if source.error is not None:
+            rejection_reason = source.error
+        elif source.published_at is None:
+            rejection_reason = (
+                "Publication timestamp could not be verified."
+            )
+        elif (
+            source.timestamp_quality
             == TimestampQuality.UNKNOWN
         ):
-            continue
+            rejection_reason = (
+                "Publication timestamp quality is unknown."
+            )
+        elif source.published_at > information_cutoff:
+            rejection_reason = (
+                "Source was published after information cutoff."
+            )
+        # dateModified is persisted for audit, but protocol v0.1
+        # does not make it an evidence-eligibility criterion.
 
-        if candidate.published_at > information_cutoff:
-            continue
+        is_accepted = rejection_reason is None
 
-        evidence_id_material = (
-            f"{retrieval.response_id}|"
-            f"{index}|"
-            f"{candidate.source_url}"
-        )
+        if is_accepted:
+            evidence_id_material = (
+                f"{retrieval.response_id}|"
+                f"{index}|"
+                f"{candidate.source_url}"
+            )
 
-        evidence_id = hashlib.sha256(
-            evidence_id_material.encode("utf-8")
-        ).hexdigest()
+            evidence_id = hashlib.sha256(
+                evidence_id_material.encode("utf-8")
+            ).hexdigest()
 
-        accepted.append(
-            EvidenceItem(
-                evidence_id=evidence_id,
-                source_url=candidate.source_url,
-                source_name=candidate.source_name,
-                title=candidate.title,
-                published_at=candidate.published_at,
-                retrieved_at=retrieval.retrieved_at,
-                excerpt=candidate.excerpt,
-                timestamp_quality=candidate.timestamp_quality,
+            accepted.append(
+                EvidenceItem(
+                    evidence_id=evidence_id,
+                    source_url=source.source_url,
+                    source_name=candidate.source_name,
+                    title=candidate.title,
+                    published_at=source.published_at,
+                    retrieved_at=source.fetched_at,
+                    excerpt=candidate.excerpt,
+                    timestamp_quality=source.timestamp_quality,
+                )
+            )
+
+        verifications.append(
+            CandidateVerification(
+                position=index,
+                candidate=candidate,
+                source=source,
+                accepted=is_accepted,
+                rejection_reason=rejection_reason,
             )
         )
 
-    return tuple(accepted)
+    return (
+        tuple(accepted),
+        tuple(verifications),
+    )
+

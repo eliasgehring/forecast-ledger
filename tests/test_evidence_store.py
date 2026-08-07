@@ -17,10 +17,19 @@ from forecast_ledger.domain import (
 )
 from forecast_ledger.evidence_store import (
     EvidenceConflictError,
+    PacketValidationStatus,
     initialize_evidence_store,
     load_evidence_items_for_packet,
+    load_valid_packet_id_for_checkpoint,
     record_evidence_packet,
+    record_packet_validation,
 )
+from forecast_ledger.retrieval_store import (
+    finish_retrieval_attempt_success,
+    initialize_retrieval_store,
+    start_retrieval_attempt,
+)
+
 from forecast_ledger.snapshot_store import (
     initialize_snapshot_store,
     record_market_snapshot,
@@ -51,6 +60,7 @@ def setup_connection() -> sqlite3.Connection:
     initialize_checkpoint_ledger(connection)
     initialize_snapshot_store(connection)
     initialize_evidence_store(connection)
+    initialize_retrieval_store(connection)
 
     create_checkpoint_record(
         connection=connection,
@@ -78,6 +88,26 @@ def setup_connection() -> sqlite3.Connection:
         raw_yes_book={"book": "yes"},
         raw_no_book=None,
         no_book_error=None,
+    )
+
+    start_retrieval_attempt(
+        connection=connection,
+        market_id="market-1",
+        checkpoint=Checkpoint.DAYS_7,
+        attempt_number=1,
+        model="retrieval-model",
+        prompt_version="retrieval-v1",
+        requested_at=CUTOFF + timedelta(seconds=30),
+    )
+
+    finish_retrieval_attempt_success(
+        connection=connection,
+        market_id="market-1",
+        checkpoint=Checkpoint.DAYS_7,
+        attempt_number=1,
+        completed_at=CUTOFF + timedelta(seconds=45),
+        response_id="resp-1",
+        raw_output='{"evidence":[]}',
     )
 
     return connection
@@ -259,4 +289,130 @@ def test_evidence_packet_is_immutable() -> None:
             packet=different_packet,
             checkpoint=Checkpoint.DAYS_7,
             evidence_items=(),
+        )
+
+
+def test_second_retrieval_attempt_can_have_its_own_packet() -> None:
+    connection = setup_connection()
+
+    first_packet = make_packet(
+        (),
+        packet_id="packet-1",
+    )
+
+    assert record_evidence_packet(
+        connection=connection,
+        packet=first_packet,
+        checkpoint=Checkpoint.DAYS_7,
+        evidence_items=(),
+        attempt_number=1,
+    )
+
+    start_retrieval_attempt(
+        connection=connection,
+        market_id="market-1",
+        checkpoint=Checkpoint.DAYS_7,
+        attempt_number=2,
+        model="retrieval-model",
+        prompt_version="retrieval-v1",
+        requested_at=CUTOFF + timedelta(minutes=1),
+    )
+
+    finish_retrieval_attempt_success(
+        connection=connection,
+        market_id="market-1",
+        checkpoint=Checkpoint.DAYS_7,
+        attempt_number=2,
+        completed_at=CUTOFF + timedelta(minutes=1, seconds=30),
+        response_id="resp-2",
+        raw_output='{"evidence":[]}',
+    )
+
+    second_packet = make_packet(
+        (),
+        packet_id="packet-2",
+    )
+
+    assert record_evidence_packet(
+        connection=connection,
+        packet=second_packet,
+        checkpoint=Checkpoint.DAYS_7,
+        evidence_items=(),
+        attempt_number=2,
+    )
+
+
+def test_only_one_valid_packet_per_checkpoint() -> None:
+    connection = setup_connection()
+
+    first_packet = make_packet(
+        (),
+        packet_id="packet-1",
+    )
+
+    record_evidence_packet(
+        connection=connection,
+        packet=first_packet,
+        checkpoint=Checkpoint.DAYS_7,
+        evidence_items=(),
+        attempt_number=1,
+    )
+
+    record_packet_validation(
+        connection=connection,
+        packet_id="packet-1",
+        status=PacketValidationStatus.VALID,
+        reason="verified",
+        validated_at=CUTOFF + timedelta(minutes=3),
+    )
+
+    assert load_valid_packet_id_for_checkpoint(
+        connection,
+        "market-1",
+        Checkpoint.DAYS_7,
+    ) == "packet-1"
+
+    start_retrieval_attempt(
+        connection=connection,
+        market_id="market-1",
+        checkpoint=Checkpoint.DAYS_7,
+        attempt_number=2,
+        model="retrieval-model",
+        prompt_version="retrieval-v1",
+        requested_at=CUTOFF + timedelta(minutes=1),
+    )
+
+    finish_retrieval_attempt_success(
+        connection=connection,
+        market_id="market-1",
+        checkpoint=Checkpoint.DAYS_7,
+        attempt_number=2,
+        completed_at=CUTOFF + timedelta(minutes=1, seconds=30),
+        response_id="resp-2",
+        raw_output='{"evidence":[]}',
+    )
+
+    second_packet = make_packet(
+        (),
+        packet_id="packet-2",
+    )
+
+    record_evidence_packet(
+        connection=connection,
+        packet=second_packet,
+        checkpoint=Checkpoint.DAYS_7,
+        evidence_items=(),
+        attempt_number=2,
+    )
+
+    with pytest.raises(
+        EvidenceConflictError,
+        match="valid evidence packet already exists",
+    ):
+        record_packet_validation(
+            connection=connection,
+            packet_id="packet-2",
+            status=PacketValidationStatus.VALID,
+            reason="also verified",
+            validated_at=CUTOFF + timedelta(minutes=4),
         )

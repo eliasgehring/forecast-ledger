@@ -18,6 +18,14 @@ PUBLICATION_META_KEYS = {
     "pubdate",
 }
 
+MODIFICATION_META_KEYS = {
+    "article:modified_time",
+    "datemodified",
+    "modified",
+    "lastmod",
+    "last-modified",
+}
+
 
 @dataclass(frozen=True)
 class VerifiedSource:
@@ -28,6 +36,9 @@ class VerifiedSource:
     timestamp_quality: TimestampQuality
     verification_method: str | None
     error: str | None
+    modified_at: datetime | None = None
+    modification_method: str | None = None
+    modification_error: str | None = None
 
 
 class PublicationMetadataParser(HTMLParser):
@@ -94,10 +105,6 @@ def parse_source_timestamp(
 ) -> tuple[datetime, TimestampQuality]:
     value = value.strip()
 
-    # datetime.fromisoformat() also accepts a bare YYYY-MM-DD
-    # and turns it into a naive midnight datetime. Detect the
-    # date-only form first so we preserve the protocol's
-    # conservative end-of-day semantics.
     try:
         parsed_date = date.fromisoformat(value)
     except ValueError:
@@ -131,28 +138,42 @@ def parse_source_timestamp(
     return parsed, TimestampQuality.VERIFIED
 
 
-def _json_ld_dates(
+def _json_ld_values(
     value: Any,
+    target_key: str,
 ) -> list[str]:
-    dates: list[str] = []
+    values: list[str] = []
 
     if isinstance(value, dict):
         for key, nested in value.items():
-            if key.lower() == "datepublished":
+            if key.lower() == target_key.lower():
                 if isinstance(nested, str):
-                    dates.append(nested)
+                    values.append(nested)
             else:
-                dates.extend(_json_ld_dates(nested))
+                values.extend(
+                    _json_ld_values(
+                        nested,
+                        target_key,
+                    )
+                )
 
     elif isinstance(value, list):
         for nested in value:
-            dates.extend(_json_ld_dates(nested))
+            values.extend(
+                _json_ld_values(
+                    nested,
+                    target_key,
+                )
+            )
 
-    return dates
+    return values
 
 
-def extract_publication_candidates(
+def _extract_candidates(
     html: str,
+    meta_keys: set[str],
+    json_ld_key: str,
+    include_time_tags: bool,
 ) -> tuple[tuple[str, str], ...]:
     parser = PublicationMetadataParser()
     parser.feed(html)
@@ -160,7 +181,7 @@ def extract_publication_candidates(
     candidates: list[tuple[str, str]] = []
 
     for key, value in parser.meta_values:
-        if key in PUBLICATION_META_KEYS:
+        if key in meta_keys:
             candidates.append(
                 (f"meta:{key}", value)
             )
@@ -171,33 +192,61 @@ def extract_publication_candidates(
         except json.JSONDecodeError:
             continue
 
-        for value in _json_ld_dates(payload):
+        for value in _json_ld_values(
+            payload,
+            json_ld_key,
+        ):
             candidates.append(
-                ("jsonld:datePublished", value)
+                (f"jsonld:{json_ld_key}", value)
             )
 
-    for value in parser.time_values:
-        candidates.append(
-            ("time:datetime", value)
-        )
+    if include_time_tags:
+        for value in parser.time_values:
+            candidates.append(
+                ("time:datetime", value)
+            )
 
     return tuple(candidates)
 
 
-def verify_source_html(
-    source_url: str,
+def extract_publication_candidates(
     html: str,
-    fetched_at: datetime,
-) -> VerifiedSource:
-    candidates = extract_publication_candidates(html)
+) -> tuple[tuple[str, str], ...]:
+    return _extract_candidates(
+        html=html,
+        meta_keys=PUBLICATION_META_KEYS,
+        json_ld_key="datePublished",
+        include_time_tags=True,
+    )
 
+
+def extract_modification_candidates(
+    html: str,
+) -> tuple[tuple[str, str], ...]:
+    return _extract_candidates(
+        html=html,
+        meta_keys=MODIFICATION_META_KEYS,
+        json_ld_key="dateModified",
+        include_time_tags=False,
+    )
+
+
+def _choose_timestamp(
+    candidates: tuple[tuple[str, str], ...],
+    conflict_message: str,
+) -> tuple[
+    datetime | None,
+    TimestampQuality,
+    str | None,
+    str | None,
+]:
     parsed_candidates: list[
         tuple[str, datetime, TimestampQuality]
     ] = []
 
     for method, raw_value in candidates:
         try:
-            published_at, quality = parse_source_timestamp(
+            timestamp, quality = parse_source_timestamp(
                 raw_value
             )
         except ValueError:
@@ -206,24 +255,17 @@ def verify_source_html(
         parsed_candidates.append(
             (
                 method,
-                published_at,
+                timestamp,
                 quality,
             )
         )
 
-    content_sha256 = hashlib.sha256(
-        html.encode("utf-8")
-    ).hexdigest()
-
     if not parsed_candidates:
-        return VerifiedSource(
-            source_url=source_url,
-            fetched_at=fetched_at,
-            content_sha256=content_sha256,
-            published_at=None,
-            timestamp_quality=TimestampQuality.UNKNOWN,
-            verification_method=None,
-            error="No usable publication metadata found.",
+        return (
+            None,
+            TimestampQuality.UNKNOWN,
+            None,
+            None,
         )
 
     distinct_dates = {
@@ -232,14 +274,11 @@ def verify_source_html(
     }
 
     if len(distinct_dates) != 1:
-        return VerifiedSource(
-            source_url=source_url,
-            fetched_at=fetched_at,
-            content_sha256=content_sha256,
-            published_at=None,
-            timestamp_quality=TimestampQuality.UNKNOWN,
-            verification_method=None,
-            error="Conflicting publication dates found.",
+        return (
+            None,
+            TimestampQuality.UNKNOWN,
+            None,
+            conflict_message,
         )
 
     verified_candidates = [
@@ -254,14 +293,68 @@ def verify_source_html(
         else parsed_candidates[0]
     )
 
+    return (
+        chosen[1],
+        chosen[2],
+        chosen[0],
+        None,
+    )
+
+
+def verify_source_html(
+    source_url: str,
+    html: str,
+    fetched_at: datetime,
+) -> VerifiedSource:
+    content_sha256 = hashlib.sha256(
+        html.encode("utf-8")
+    ).hexdigest()
+
+    (
+        published_at,
+        timestamp_quality,
+        verification_method,
+        publication_error,
+    ) = _choose_timestamp(
+        extract_publication_candidates(html),
+        "Conflicting publication dates found.",
+    )
+
+    if published_at is None:
+        return VerifiedSource(
+            source_url=source_url,
+            fetched_at=fetched_at,
+            content_sha256=content_sha256,
+            published_at=None,
+            timestamp_quality=TimestampQuality.UNKNOWN,
+            verification_method=None,
+            error=(
+                publication_error
+                or "No usable publication metadata found."
+            ),
+        )
+
+    (
+        modified_at,
+        _,
+        modification_method,
+        modification_error,
+    ) = _choose_timestamp(
+        extract_modification_candidates(html),
+        "Conflicting modification dates found.",
+    )
+
     return VerifiedSource(
         source_url=source_url,
         fetched_at=fetched_at,
         content_sha256=content_sha256,
-        published_at=chosen[1],
-        timestamp_quality=chosen[2],
-        verification_method=chosen[0],
+        published_at=published_at,
+        timestamp_quality=timestamp_quality,
+        verification_method=verification_method,
         error=None,
+        modified_at=modified_at,
+        modification_method=modification_method,
+        modification_error=modification_error,
     )
 
 
