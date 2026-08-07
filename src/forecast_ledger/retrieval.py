@@ -1,7 +1,7 @@
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from typing import Any
 from urllib.parse import urlparse
 
@@ -114,10 +114,7 @@ def parse_publication_time(
     timestamp_quality: TimestampQuality,
 ) -> datetime:
     if timestamp_quality == TimestampQuality.DATE_ONLY:
-        publication_date = datetime.strptime(
-            value,
-            "%Y-%m-%d",
-        ).date()
+        publication_date = date.fromisoformat(value)
 
         return datetime.combine(
             publication_date,
@@ -125,9 +122,7 @@ def parse_publication_time(
             tzinfo=UTC,
         )
 
-    parsed = datetime.fromisoformat(
-        value.replace("Z", "+00:00")
-    )
+    parsed = datetime.fromisoformat(value)
 
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(
