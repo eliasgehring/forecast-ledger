@@ -3,7 +3,6 @@ from datetime import UTC, datetime
 from forecast_ledger.domain import Market, MarketSnapshot
 from forecast_ledger.eligibility import evaluate_machine_eligibility
 
-
 NOW = datetime(2026, 8, 7, 9, 0, tzinfo=UTC)
 
 

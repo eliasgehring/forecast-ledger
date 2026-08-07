@@ -3,7 +3,6 @@ from datetime import datetime
 
 from forecast_ledger.domain import Market, MarketSnapshot, require_timezone_aware
 
-
 MIN_DAYS_TO_CLOSE = 5.0
 MAX_DAYS_TO_CLOSE = 45.0
 MAX_YES_SPREAD = 0.10

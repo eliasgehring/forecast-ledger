@@ -29,7 +29,6 @@ from forecast_ledger.retrieval_store import (
     initialize_retrieval_store,
     start_retrieval_attempt,
 )
-
 from forecast_ledger.snapshot_store import (
     initialize_snapshot_store,
     record_market_snapshot,
