@@ -17,6 +17,25 @@ class MarketCandidate:
     tag_slugs: tuple[str, ...]
 
 
+
+@dataclass(frozen=True)
+class DiscoveryIssue:
+    event_id: str
+    market_id: str
+    error_type: str
+    message: str
+
+
+@dataclass(frozen=True)
+class DiscoveryReport:
+    candidates: tuple[MarketCandidate, ...]
+    events_seen: int
+    raw_markets_seen: int
+    parsed_markets: int
+    outside_time_window: int
+    issues: tuple[DiscoveryIssue, ...]
+
+
 def extract_event_tag_slugs(event: dict[str, Any]) -> tuple[str, ...]:
     raw_tags = event.get("tags", [])
 
@@ -93,7 +112,7 @@ def discover_time_window_candidates(
     evaluated_at: datetime | None = None,
     minimum_days: float = 5.0,
     maximum_days: float = 45.0,
-) -> list[MarketCandidate]:
+) -> DiscoveryReport:
     if evaluated_at is None:
         evaluated_at = datetime.now(UTC)
 
@@ -101,6 +120,13 @@ def discover_time_window_candidates(
         raise ValueError("evaluated_at must be timezone-aware.")
 
     candidates: list[MarketCandidate] = []
+    issues: list[DiscoveryIssue] = []
+
+    events_seen = 0
+    raw_markets_seen = 0
+    parsed_markets = 0
+    outside_time_window = 0
+
     cursor: str | None = None
     seen_cursors: set[str] = set()
 
@@ -111,13 +137,33 @@ def discover_time_window_candidates(
         )
 
         for event in events:
+            events_seen += 1
+
             raw_markets = event.get("markets", [])
 
             if not isinstance(raw_markets, list):
+                issues.append(
+                    DiscoveryIssue(
+                        event_id=str(event.get("id", "<unknown>")),
+                        market_id="<unknown>",
+                        error_type="invalid_markets_container",
+                        message="Event markets field is not a list.",
+                    )
+                )
                 continue
 
             for raw_market in raw_markets:
+                raw_markets_seen += 1
+
                 if not isinstance(raw_market, dict):
+                    issues.append(
+                        DiscoveryIssue(
+                            event_id=str(event.get("id", "<unknown>")),
+                            market_id="<unknown>",
+                            error_type="invalid_market_shape",
+                            message="Embedded market is not an object.",
+                        )
+                    )
                     continue
 
                 try:
@@ -125,8 +171,18 @@ def discover_time_window_candidates(
                         event=event,
                         raw_market=raw_market,
                     )
-                except (KeyError, TypeError, ValueError):
+                except (KeyError, TypeError, ValueError) as exc:
+                    issues.append(
+                        DiscoveryIssue(
+                            event_id=str(event.get("id", "<unknown>")),
+                            market_id=str(raw_market.get("id", "<unknown>")),
+                            error_type=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
                     continue
+
+                parsed_markets += 1
 
                 days_to_close = (
                     candidate.market.close_time - evaluated_at
@@ -134,6 +190,8 @@ def discover_time_window_candidates(
 
                 if minimum_days <= days_to_close <= maximum_days:
                     candidates.append(candidate)
+                else:
+                    outside_time_window += 1
 
         if next_cursor is None:
             break
@@ -146,4 +204,11 @@ def discover_time_window_candidates(
         seen_cursors.add(next_cursor)
         cursor = next_cursor
 
-    return candidates
+    return DiscoveryReport(
+        candidates=tuple(candidates),
+        events_seen=events_seen,
+        raw_markets_seen=raw_markets_seen,
+        parsed_markets=parsed_markets,
+        outside_time_window=outside_time_window,
+        issues=tuple(issues),
+    )

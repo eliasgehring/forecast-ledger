@@ -128,7 +128,7 @@ def test_discovery_exhausts_all_pages(
         fake_fetch_event_page,
     )
 
-    candidates = discovery.discover_time_window_candidates(
+    report = discovery.discover_time_window_candidates(
         evaluated_at=datetime(
             2026,
             8,
@@ -139,7 +139,7 @@ def test_discovery_exhausts_all_pages(
         ),
     )
 
-    assert [candidate.market.market_id for candidate in candidates] == [
+    assert [candidate.market.market_id for candidate in report.candidates] == [
         "market-1",
         "market-2",
     ]
@@ -178,3 +178,41 @@ def test_discovery_rejects_repeated_pagination_cursor(
                 tzinfo=UTC,
             ),
         )
+
+
+def test_discovery_records_unparseable_market(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = make_event()
+    bad_market = make_market()
+    bad_market["outcomes"] = "not-json"
+    event["markets"] = [bad_market]
+
+    def fake_fetch_event_page(
+        limit: int = 100,
+        after_cursor: str | None = None,
+    ) -> tuple[list[dict], str | None]:
+        return [event], None
+
+    monkeypatch.setattr(
+        discovery,
+        "fetch_event_page",
+        fake_fetch_event_page,
+    )
+
+    report = discovery.discover_time_window_candidates(
+        evaluated_at=datetime(
+            2026,
+            8,
+            7,
+            9,
+            0,
+            tzinfo=UTC,
+        ),
+    )
+
+    assert report.candidates == ()
+    assert report.raw_markets_seen == 1
+    assert report.parsed_markets == 0
+    assert len(report.issues) == 1
+    assert report.issues[0].market_id == "market-1"
