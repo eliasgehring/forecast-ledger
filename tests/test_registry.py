@@ -77,7 +77,7 @@ def test_register_and_load_market() -> None:
     assert tracked[0].market_id == "market-1"
     assert tracked[0].categories == ("technology",)
     assert tracked[0].first_seen_at == FIRST_SEEN
-    assert tracked[0].protocol_version == "v0.1"
+    assert tracked[0].protocol_version == "v0.2"
 
 
 def test_identical_registration_is_idempotent() -> None:
