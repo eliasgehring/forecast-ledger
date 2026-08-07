@@ -210,4 +210,3 @@ def fetch_market_snapshot(
     market: Market,
 ) -> MarketSnapshot:
     return fetch_market_snapshot_with_raw(market).snapshot
-
