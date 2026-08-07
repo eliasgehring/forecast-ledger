@@ -101,3 +101,53 @@ def test_best_bid_ask_from_book_rejects_crossed_book() -> None:
 
     with pytest.raises(ValueError, match="best bid exceeds best ask"):
         best_bid_ask_from_book(raw_book)
+
+
+def test_no_book_failure_does_not_invalidate_yes_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from forecast_ledger import polymarket
+
+    market = Market(
+        market_id="market-1",
+        question="Will example happen?",
+        resolution_rules="Resolves YES if example happens.",
+        close_time=datetime(
+            2026,
+            8,
+            31,
+            tzinfo=UTC,
+        ),
+        yes_token_id="yes-token",
+        no_token_id="no-token",
+    )
+
+    def fake_fetch(token_id: str) -> dict:
+        if token_id == "yes-token":
+            return {
+                "bids": [{"price": "0.40"}],
+                "asks": [{"price": "0.44"}],
+            }
+
+        raise httpx.RemoteProtocolError(
+            "NO diagnostic failed"
+        )
+
+    monkeypatch.setattr(
+        polymarket,
+        "fetch_order_book",
+        fake_fetch,
+    )
+
+    fetched = polymarket.fetch_market_snapshot_with_raw(
+        market
+    )
+
+    assert fetched.snapshot.yes_bid == pytest.approx(0.40)
+    assert fetched.snapshot.yes_ask == pytest.approx(0.44)
+    assert fetched.snapshot.no_bid is None
+    assert fetched.snapshot.no_ask is None
+    assert fetched.no_book is None
+    assert fetched.no_book_error is not None

@@ -43,7 +43,7 @@ def test_create_checkpoint_record() -> None:
         scheduled_at=SCHEDULED_AT,
         window_start=WINDOW_START,
         window_end=WINDOW_END,
-        status=CheckpointStatus.STARTED,
+        status=CheckpointStatus.PENDING,
         created_at=CREATED_AT,
     )
 
@@ -53,7 +53,7 @@ def test_create_checkpoint_record() -> None:
     assert len(records) == 1
     assert records[0].market_id == "market-1"
     assert records[0].checkpoint == Checkpoint.DAYS_7
-    assert records[0].status == CheckpointStatus.STARTED
+    assert records[0].status == CheckpointStatus.PENDING
 
 
 def test_same_market_checkpoint_is_idempotent() -> None:
@@ -67,7 +67,7 @@ def test_same_market_checkpoint_is_idempotent() -> None:
         scheduled_at=SCHEDULED_AT,
         window_start=WINDOW_START,
         window_end=WINDOW_END,
-        status=CheckpointStatus.STARTED,
+        status=CheckpointStatus.PENDING,
         created_at=CREATED_AT,
     )
 
@@ -78,7 +78,7 @@ def test_same_market_checkpoint_is_idempotent() -> None:
         scheduled_at=SCHEDULED_AT,
         window_start=WINDOW_START,
         window_end=WINDOW_END,
-        status=CheckpointStatus.STARTED,
+        status=CheckpointStatus.PENDING,
         created_at=CREATED_AT,
     )
 
@@ -98,7 +98,7 @@ def test_different_checkpoints_are_distinct() -> None:
         scheduled_at=SCHEDULED_AT,
         window_start=WINDOW_START,
         window_end=WINDOW_END,
-        status=CheckpointStatus.STARTED,
+        status=CheckpointStatus.PENDING,
         created_at=CREATED_AT,
     )
 
@@ -109,7 +109,7 @@ def test_different_checkpoints_are_distinct() -> None:
         scheduled_at=SCHEDULED_AT,
         window_start=WINDOW_START,
         window_end=WINDOW_END,
-        status=CheckpointStatus.STARTED,
+        status=CheckpointStatus.PENDING,
         created_at=CREATED_AT,
     )
 
@@ -127,7 +127,7 @@ def test_checkpoint_exists() -> None:
         scheduled_at=SCHEDULED_AT,
         window_start=WINDOW_START,
         window_end=WINDOW_END,
-        status=CheckpointStatus.STARTED,
+        status=CheckpointStatus.PENDING,
         created_at=CREATED_AT,
     )
 

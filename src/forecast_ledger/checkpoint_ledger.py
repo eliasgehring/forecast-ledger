@@ -9,8 +9,10 @@ from forecast_ledger.registry import PROTOCOL_VERSION
 
 
 class CheckpointStatus(str, Enum):
-    STARTED = "started"
+    PENDING = "pending"
+    SNAPSHOT_RECORDED = "snapshot_recorded"
     CHECKPOINT_UNAVAILABLE = "checkpoint_unavailable"
+    MARKET_DATA_FAILURE = "market_data_failure"
 
 
 @dataclass(frozen=True)

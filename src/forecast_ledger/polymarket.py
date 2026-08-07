@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,6 +9,15 @@ from forecast_ledger.domain import Market, MarketSnapshot
 
 GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
 CLOB_BASE_URL = "https://clob.polymarket.com"
+
+
+
+@dataclass(frozen=True)
+class FetchedMarketSnapshot:
+    snapshot: MarketSnapshot
+    yes_book: dict[str, Any]
+    no_book: dict[str, Any] | None
+    no_book_error: str | None
 
 
 def parse_datetime(value: str) -> datetime:
@@ -151,23 +161,34 @@ def fetch_order_book(
     return payload
 
 
-def fetch_market_snapshot(
+def fetch_market_snapshot_with_raw(
     market: Market,
-) -> MarketSnapshot:
+) -> FetchedMarketSnapshot:
     yes_book = fetch_order_book(market.yes_token_id)
-    no_book = fetch_order_book(market.no_token_id)
-
     yes_bid, yes_ask = best_bid_ask_from_book(yes_book)
-    no_bid, no_ask = best_bid_ask_from_book(no_book)
 
+    # The protocol benchmark depends on the YES book.
+    # Freeze the observation time immediately after that
+    # required market information has been observed.
     observed_at = datetime.now(UTC)
+
+    no_book: dict[str, Any] | None = None
+    no_book_error: str | None = None
+    no_bid: float | None = None
+    no_ask: float | None = None
+
+    try:
+        no_book = fetch_order_book(market.no_token_id)
+        no_bid, no_ask = best_bid_ask_from_book(no_book)
+    except (httpx.HTTPError, TypeError, ValueError) as exc:
+        no_book_error = f"{type(exc).__name__}: {exc}"
 
     snapshot_id = (
         f"{market.market_id}:"
         f"{observed_at.isoformat(timespec='microseconds')}"
     )
 
-    return MarketSnapshot(
+    snapshot = MarketSnapshot(
         snapshot_id=snapshot_id,
         market_id=market.market_id,
         observed_at=observed_at,
@@ -176,3 +197,17 @@ def fetch_market_snapshot(
         no_bid=no_bid,
         no_ask=no_ask,
     )
+
+    return FetchedMarketSnapshot(
+        snapshot=snapshot,
+        yes_book=yes_book,
+        no_book=no_book,
+        no_book_error=no_book_error,
+    )
+
+
+def fetch_market_snapshot(
+    market: Market,
+) -> MarketSnapshot:
+    return fetch_market_snapshot_with_raw(market).snapshot
+
