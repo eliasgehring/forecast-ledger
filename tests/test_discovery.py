@@ -216,3 +216,130 @@ def test_discovery_records_unparseable_market(
     assert report.parsed_markets == 0
     assert len(report.issues) == 1
     assert report.issues[0].market_id == "market-1"
+
+
+def test_discovery_classifies_non_binary_as_exclusion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = make_event()
+    market = make_market()
+    market["outcomes"] = json.dumps(
+        ["Candidate A", "Candidate B", "Candidate C"]
+    )
+    event["markets"] = [market]
+
+    monkeypatch.setattr(
+        discovery,
+        "fetch_event_page",
+        lambda limit=100, after_cursor=None: ([event], None),
+    )
+
+    report = discovery.discover_time_window_candidates(
+        evaluated_at=datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+    )
+
+    assert report.excluded_non_binary == 1
+    assert report.issues == ()
+    assert report.parsed_markets == 0
+
+
+def test_discovery_classifies_missing_close_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = make_event()
+    market = make_market()
+    del market["endDate"]
+    event["markets"] = [market]
+
+    monkeypatch.setattr(
+        discovery,
+        "fetch_event_page",
+        lambda limit=100, after_cursor=None: ([event], None),
+    )
+
+    report = discovery.discover_time_window_candidates(
+        evaluated_at=datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+    )
+
+    assert report.excluded_missing_close_time == 1
+    assert report.issues == ()
+    assert report.parsed_markets == 0
+
+
+def test_discovery_classifies_missing_clob_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = make_event()
+    market = make_market()
+    del market["clobTokenIds"]
+    event["markets"] = [market]
+
+    monkeypatch.setattr(
+        discovery,
+        "fetch_event_page",
+        lambda limit=100, after_cursor=None: ([event], None),
+    )
+
+    report = discovery.discover_time_window_candidates(
+        evaluated_at=datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+    )
+
+    assert report.excluded_missing_clob_token_ids == 1
+    assert report.issues == ()
+    assert report.parsed_markets == 0
+
+
+def test_discovery_accounting_reconciles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = make_event()
+
+    valid = make_market()
+
+    non_binary = make_market()
+    non_binary["id"] = "non-binary"
+    non_binary["outcomes"] = json.dumps(["A", "B", "C"])
+
+    missing_close = make_market()
+    missing_close["id"] = "missing-close"
+    del missing_close["endDate"]
+
+    missing_tokens = make_market()
+    missing_tokens["id"] = "missing-tokens"
+    del missing_tokens["clobTokenIds"]
+
+    malformed = make_market()
+    malformed["id"] = "malformed"
+    malformed["outcomes"] = "not-json"
+
+    event["markets"] = [
+        valid,
+        non_binary,
+        missing_close,
+        missing_tokens,
+        malformed,
+    ]
+
+    monkeypatch.setattr(
+        discovery,
+        "fetch_event_page",
+        lambda limit=100, after_cursor=None: ([event], None),
+    )
+
+    report = discovery.discover_time_window_candidates(
+        evaluated_at=datetime(2026, 8, 7, 9, 0, tzinfo=UTC),
+    )
+
+    accounted = (
+        report.parsed_markets
+        + report.excluded_non_binary
+        + report.excluded_missing_close_time
+        + report.excluded_missing_clob_token_ids
+        + len(report.issues)
+    )
+
+    assert accounted == report.raw_markets_seen
+    assert report.parsed_markets == (
+        report.outside_time_window
+        + len(report.candidates)
+    )

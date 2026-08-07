@@ -5,7 +5,11 @@ from typing import Any
 import httpx
 
 from forecast_ledger.domain import Market
-from forecast_ledger.polymarket import GAMMA_BASE_URL, market_from_gamma
+from forecast_ledger.polymarket import (
+    GAMMA_BASE_URL,
+    market_from_gamma,
+    parse_json_string_list,
+)
 
 
 @dataclass(frozen=True)
@@ -33,6 +37,9 @@ class DiscoveryReport:
     raw_markets_seen: int
     parsed_markets: int
     outside_time_window: int
+    excluded_non_binary: int
+    excluded_missing_close_time: int
+    excluded_missing_clob_token_ids: int
     issues: tuple[DiscoveryIssue, ...]
 
 
@@ -127,6 +134,10 @@ def discover_time_window_candidates(
     parsed_markets = 0
     outside_time_window = 0
 
+    excluded_non_binary = 0
+    excluded_missing_close_time = 0
+    excluded_missing_clob_token_ids = 0
+
     cursor: str | None = None
     seen_cursors: set[str] = set()
 
@@ -166,6 +177,37 @@ def discover_time_window_candidates(
                     )
                     continue
 
+                event_id = str(event.get("id", "<unknown>"))
+                market_id = str(raw_market.get("id", "<unknown>"))
+
+                try:
+                    outcomes = parse_json_string_list(
+                        raw_market["outcomes"],
+                        "outcomes",
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    issues.append(
+                        DiscoveryIssue(
+                            event_id=event_id,
+                            market_id=market_id,
+                            error_type=type(exc).__name__,
+                            message=str(exc),
+                        )
+                    )
+                    continue
+
+                if outcomes != ["Yes", "No"]:
+                    excluded_non_binary += 1
+                    continue
+
+                if "endDate" not in raw_market:
+                    excluded_missing_close_time += 1
+                    continue
+
+                if "clobTokenIds" not in raw_market:
+                    excluded_missing_clob_token_ids += 1
+                    continue
+
                 try:
                     candidate = candidate_from_event_market(
                         event=event,
@@ -174,8 +216,8 @@ def discover_time_window_candidates(
                 except (KeyError, TypeError, ValueError) as exc:
                     issues.append(
                         DiscoveryIssue(
-                            event_id=str(event.get("id", "<unknown>")),
-                            market_id=str(raw_market.get("id", "<unknown>")),
+                            event_id=event_id,
+                            market_id=market_id,
                             error_type=type(exc).__name__,
                             message=str(exc),
                         )
@@ -210,5 +252,8 @@ def discover_time_window_candidates(
         raw_markets_seen=raw_markets_seen,
         parsed_markets=parsed_markets,
         outside_time_window=outside_time_window,
+        excluded_non_binary=excluded_non_binary,
+        excluded_missing_close_time=excluded_missing_close_time,
+        excluded_missing_clob_token_ids=excluded_missing_clob_token_ids,
         issues=tuple(issues),
     )
