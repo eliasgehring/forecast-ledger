@@ -343,3 +343,49 @@ def test_discovery_accounting_reconciles(
         report.outside_time_window
         + len(report.candidates)
     )
+
+
+def test_fetch_event_page_retries_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    calls = 0
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "events": [],
+                "next_cursor": None,
+            }
+
+    def fake_get(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+
+        if calls == 1:
+            raise httpx.RemoteProtocolError(
+                "temporary disconnect"
+            )
+
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        discovery.httpx,
+        "get",
+        fake_get,
+    )
+    monkeypatch.setattr(
+        discovery.time,
+        "sleep",
+        lambda seconds: None,
+    )
+
+    events, cursor = discovery.fetch_event_page()
+
+    assert events == []
+    assert cursor is None
+    assert calls == 2

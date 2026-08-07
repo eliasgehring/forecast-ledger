@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -90,12 +91,30 @@ def fetch_event_page(
     if after_cursor is not None:
         params["after_cursor"] = after_cursor
 
-    response = httpx.get(
-        f"{GAMMA_BASE_URL}/events/keyset",
-        params=params,
-        timeout=20.0,
-    )
-    response.raise_for_status()
+    response: httpx.Response | None = None
+    last_error: Exception | None = None
+
+    for attempt in range(3):
+        try:
+            response = httpx.get(
+                f"{GAMMA_BASE_URL}/events/keyset",
+                params=params,
+                timeout=20.0,
+            )
+            response.raise_for_status()
+            break
+        except httpx.TransportError as exc:
+            last_error = exc
+
+            if attempt == 2:
+                raise
+
+            time.sleep(2 ** attempt)
+
+    if response is None:
+        raise RuntimeError(
+            "Gamma request failed without producing a response."
+        ) from last_error
 
     payload = response.json()
 
