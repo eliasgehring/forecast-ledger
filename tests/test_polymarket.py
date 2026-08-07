@@ -58,3 +58,46 @@ def test_market_from_gamma_requires_resolution_rules() -> None:
         match="no usable resolution rules",
     ):
         market_from_gamma(raw)
+
+
+from forecast_ledger.polymarket import best_bid_ask_from_book
+
+
+def test_best_bid_ask_from_book_does_not_assume_sort_order() -> None:
+    raw_book = {
+        "bids": [
+            {"price": "0.41", "size": "100"},
+            {"price": "0.47", "size": "50"},
+            {"price": "0.44", "size": "80"},
+        ],
+        "asks": [
+            {"price": "0.55", "size": "40"},
+            {"price": "0.51", "size": "70"},
+            {"price": "0.53", "size": "90"},
+        ],
+    }
+
+    best_bid, best_ask = best_bid_ask_from_book(raw_book)
+
+    assert best_bid == pytest.approx(0.47)
+    assert best_ask == pytest.approx(0.51)
+
+
+def test_best_bid_ask_from_book_rejects_missing_bid_side() -> None:
+    raw_book = {
+        "bids": [],
+        "asks": [{"price": "0.51", "size": "70"}],
+    }
+
+    with pytest.raises(ValueError, match="no bids"):
+        best_bid_ask_from_book(raw_book)
+
+
+def test_best_bid_ask_from_book_rejects_crossed_book() -> None:
+    raw_book = {
+        "bids": [{"price": "0.60", "size": "100"}],
+        "asks": [{"price": "0.55", "size": "100"}],
+    }
+
+    with pytest.raises(ValueError, match="best bid exceeds best ask"):
+        best_bid_ask_from_book(raw_book)

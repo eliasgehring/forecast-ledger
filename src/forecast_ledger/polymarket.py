@@ -1,13 +1,13 @@
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
-from forecast_ledger.domain import Market
-
+from forecast_ledger.domain import Market, MarketSnapshot
 
 GAMMA_BASE_URL = "https://gamma-api.polymarket.com"
+CLOB_BASE_URL = "https://clob.polymarket.com"
 
 
 def parse_datetime(value: str) -> datetime:
@@ -97,4 +97,82 @@ def fetch_first_parseable_market() -> Market:
     raise RuntimeError(
         "No parseable binary market found.\n"
         + "\n".join(errors)
+    )
+
+
+def best_bid_ask_from_book(
+    raw_book: dict[str, Any],
+) -> tuple[float, float]:
+    bids = raw_book.get("bids")
+    asks = raw_book.get("asks")
+
+    if not isinstance(bids, list):
+        raise TypeError("Order-book bids must be a list.")
+
+    if not isinstance(asks, list):
+        raise TypeError("Order-book asks must be a list.")
+
+    if not bids:
+        raise ValueError("Order book has no bids.")
+
+    if not asks:
+        raise ValueError("Order book has no asks.")
+
+    try:
+        bid_prices = [float(level["price"]) for level in bids]
+        ask_prices = [float(level["price"]) for level in asks]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Order book contains an invalid price level.") from exc
+
+    best_bid = max(bid_prices)
+    best_ask = min(ask_prices)
+
+    if best_bid > best_ask:
+        raise ValueError("Order book best bid exceeds best ask.")
+
+    return best_bid, best_ask
+
+
+def fetch_order_book(
+    token_id: str,
+) -> dict[str, Any]:
+    response = httpx.get(
+        f"{CLOB_BASE_URL}/book",
+        params={"token_id": token_id},
+        timeout=20.0,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+
+    if not isinstance(payload, dict):
+        raise TypeError("CLOB order-book response must be an object.")
+
+    return payload
+
+
+def fetch_market_snapshot(
+    market: Market,
+) -> MarketSnapshot:
+    yes_book = fetch_order_book(market.yes_token_id)
+    no_book = fetch_order_book(market.no_token_id)
+
+    yes_bid, yes_ask = best_bid_ask_from_book(yes_book)
+    no_bid, no_ask = best_bid_ask_from_book(no_book)
+
+    observed_at = datetime.now(UTC)
+
+    snapshot_id = (
+        f"{market.market_id}:"
+        f"{observed_at.isoformat(timespec='microseconds')}"
+    )
+
+    return MarketSnapshot(
+        snapshot_id=snapshot_id,
+        market_id=market.market_id,
+        observed_at=observed_at,
+        yes_bid=yes_bid,
+        yes_ask=yes_ask,
+        no_bid=no_bid,
+        no_ask=no_ask,
     )
