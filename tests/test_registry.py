@@ -13,7 +13,6 @@ from forecast_ledger.registry import (
     register_market,
 )
 
-
 FIRST_SEEN = datetime(
     2026,
     8,
