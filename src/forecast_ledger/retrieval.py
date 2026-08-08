@@ -17,6 +17,7 @@ from forecast_ledger.source_verification import (
     fetch_and_verify_source,
 )
 
+RETRIEVAL_MODEL = "gpt-5.4-mini-2026-03-17"
 RETRIEVAL_PROMPT_VERSION = "retrieval-v0.1"
 
 

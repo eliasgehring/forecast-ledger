@@ -7,6 +7,7 @@ from forecast_ledger.categories import CategoryMatch
 from forecast_ledger.domain import require_timezone_aware
 
 PROTOCOL_VERSION = "v0.2"
+PROTOCOL_COMMIT = "169f844144b4ae4b789a3132cd447c3664a5282e"
 
 
 class RegistryConflictError(RuntimeError):
