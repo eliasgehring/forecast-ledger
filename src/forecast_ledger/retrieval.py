@@ -148,6 +148,34 @@ def parse_publication_time(
     return parsed
 
 
+def normalize_candidate_publication_time(
+    value: str,
+    timestamp_quality: TimestampQuality,
+) -> tuple[datetime, TimestampQuality]:
+    if timestamp_quality == TimestampQuality.DATE_ONLY:
+        return (
+            parse_publication_time(
+                value,
+                TimestampQuality.DATE_ONLY,
+            ),
+            TimestampQuality.DATE_ONLY,
+        )
+
+    parsed = datetime.fromisoformat(value)
+
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        return (
+            datetime.combine(
+                parsed.date(),
+                time(23, 59, 59),
+                tzinfo=UTC,
+            ),
+            TimestampQuality.DATE_ONLY,
+        )
+
+    return parsed, timestamp_quality
+
+
 def _require_nonempty_string(
     raw: dict[str, Any],
     field_name: str,
@@ -211,7 +239,10 @@ def parse_retrieval_output(
             )
         )
 
-        published_at = parse_publication_time(
+        (
+            published_at,
+            timestamp_quality,
+        ) = normalize_candidate_publication_time(
             _require_nonempty_string(
                 raw_item,
                 "published_at",

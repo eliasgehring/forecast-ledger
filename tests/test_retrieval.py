@@ -203,3 +203,61 @@ def test_malformed_json_is_rejected() -> None:
         parse_retrieval_output(
             '{"evidence": ['
         )
+
+
+def test_naive_verified_candidate_datetime_is_downgraded_to_date_only():
+    raw_output = """
+    {
+      "evidence": [
+        {
+          "source_url": "https://example.com/source",
+          "source_name": "Example",
+          "title": "Example title",
+          "published_at": "2026-06-24T09:47:00",
+          "timestamp_quality": "verified",
+          "excerpt": "Relevant evidence."
+        }
+      ]
+    }
+    """
+
+    candidates = parse_retrieval_output(raw_output)
+
+    assert len(candidates) == 1
+
+    candidate = candidates[0]
+
+    assert candidate.timestamp_quality == TimestampQuality.DATE_ONLY
+    assert candidate.published_at == datetime(
+        2026,
+        6,
+        24,
+        23,
+        59,
+        59,
+        tzinfo=UTC,
+    )
+
+
+def test_timezone_aware_verified_candidate_preserves_exact_datetime():
+    raw_output = """
+    {
+      "evidence": [
+        {
+          "source_url": "https://example.com/source",
+          "source_name": "Example",
+          "title": "Example title",
+          "published_at": "2026-06-24T09:47:00+03:00",
+          "timestamp_quality": "verified",
+          "excerpt": "Relevant evidence."
+        }
+      ]
+    }
+    """
+
+    candidate = parse_retrieval_output(raw_output)[0]
+
+    assert candidate.timestamp_quality == TimestampQuality.VERIFIED
+    assert candidate.published_at.isoformat() == (
+        "2026-06-24T09:47:00+03:00"
+    )
