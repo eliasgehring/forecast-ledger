@@ -150,17 +150,17 @@ def test_pending_is_represented_by_absence() -> None:
 def test_terminal_resolution_is_immutable() -> None:
     connection = make_connection()
 
-    kwargs = dict(
-        connection=connection,
-        market_id="m1",
-        outcome_yes=True,
-        resolved_at=RESOLVED_AT,
-        resolution_source="source",
-        resolution_status=(
+    kwargs = {
+        "connection": connection,
+        "market_id": "m1",
+        "outcome_yes": True,
+        "resolved_at": RESOLVED_AT,
+        "resolution_source": "source",
+        "resolution_status": (
             ResolutionStatus.RESOLVED_YES
         ),
-        retrieved_at=RETRIEVED_AT,
-    )
+        "retrieved_at": RETRIEVED_AT,
+    }
 
     assert record_resolution(**kwargs) is True
     assert record_resolution(**kwargs) is False
