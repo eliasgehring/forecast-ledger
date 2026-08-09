@@ -64,6 +64,7 @@ RETRIEVAL_RETRYABLE_ERROR_TYPES = {
     "RateLimitError",
     "RetrievalOutputError",
     "NetworkError",
+    "SourceVerificationHTTPError",
 }
 
 

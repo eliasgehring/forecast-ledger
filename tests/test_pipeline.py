@@ -312,3 +312,15 @@ def test_load_targets_requires_machine_eligibility_and_inclusion():
     assert targets[0].snapshot_id == "snapshot-included"
 
     connection.close()
+
+
+def test_source_verification_http_failure_is_retryable():
+    attempts = (
+        AttemptState(
+            attempt_number=1,
+            status="failed",
+            error_type="SourceVerificationHTTPError",
+        ),
+    )
+
+    assert _next_retrieval_attempt(attempts) == 2
