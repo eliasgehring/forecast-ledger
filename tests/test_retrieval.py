@@ -261,3 +261,33 @@ def test_timezone_aware_verified_candidate_preserves_exact_datetime():
     assert candidate.published_at.isoformat() == (
         "2026-06-24T09:47:00+03:00"
     )
+
+
+def test_date_only_quality_accepts_full_iso_datetime_but_discards_time():
+    raw_output = """
+    {
+      "evidence": [
+        {
+          "source_url": "https://example.com/source",
+          "source_name": "Example",
+          "title": "Example title",
+          "published_at": "2026-07-08T00:00:00Z",
+          "timestamp_quality": "date_only",
+          "excerpt": "Relevant evidence."
+        }
+      ]
+    }
+    """
+
+    candidate = parse_retrieval_output(raw_output)[0]
+
+    assert candidate.timestamp_quality == TimestampQuality.DATE_ONLY
+    assert candidate.published_at == datetime(
+        2026,
+        7,
+        8,
+        23,
+        59,
+        59,
+        tzinfo=UTC,
+    )

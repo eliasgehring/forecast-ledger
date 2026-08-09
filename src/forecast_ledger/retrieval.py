@@ -129,7 +129,12 @@ def parse_publication_time(
     timestamp_quality: TimestampQuality,
 ) -> datetime:
     if timestamp_quality == TimestampQuality.DATE_ONLY:
-        publication_date = date.fromisoformat(value)
+        try:
+            publication_date = date.fromisoformat(value)
+        except ValueError:
+            parsed_datetime = datetime.fromisoformat(value)
+
+            publication_date = parsed_datetime.date()
 
         return datetime.combine(
             publication_date,
