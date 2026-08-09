@@ -4,6 +4,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from forecast_ledger.checkpoints import Checkpoint
 from forecast_ledger.dashboard_data import (
     PROTOCOL_VERSION,
     load_checkpoint_attempt_audit,
@@ -13,6 +14,12 @@ from forecast_ledger.dashboard_data import (
     load_checkpoint_status_counts,
     load_included_pipeline_rows,
     load_research_funnel,
+    open_read_only_connection,
+)
+from forecast_ledger.results import (
+    load_primary_results,
+    load_scored_checkpoints,
+    summarize_scored_checkpoints,
 )
 
 DB_PATH = Path("data/forecast_ledger.db")
@@ -108,6 +115,7 @@ page = st.sidebar.radio(
     "View",
     (
         "Overview",
+        "Results",
         "Market detail",
         "Audit",
     ),
@@ -267,6 +275,288 @@ if page == "Overview":
         "market settlement. Brier score, log loss and paired "
         "condition comparisons will appear here only after "
         "valid resolutions exist."
+    )
+
+
+elif page == "Results":
+    st.markdown(
+        '<div class="fl-kicker">Scoring</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.title("Results")
+
+    connection = open_read_only_connection(
+        DB_PATH
+    )
+
+    try:
+        primary_rows, primary = (
+            load_primary_results(
+                connection
+            )
+        )
+
+        secondary = []
+
+        for horizon in (
+            "14d",
+            "3d",
+            "1d",
+        ):
+            horizon_rows = (
+                load_scored_checkpoints(
+                    connection=connection,
+                    checkpoint=Checkpoint(
+                        horizon
+                    ),
+                )
+            )
+
+            horizon_summary = (
+                summarize_scored_checkpoints(
+                    horizon_rows
+                )
+            )
+
+            secondary.append(
+                (
+                    horizon,
+                    horizon_rows,
+                    horizon_summary,
+                )
+            )
+
+    finally:
+        connection.close()
+
+    st.subheader(
+        "Primary · 7-day checkpoint"
+    )
+
+    st.caption(
+        "One resolved market is one primary observation. "
+        "Lower Brier score is better."
+    )
+
+    if primary.n == 0:
+        st.info(
+            "No primary markets have a valid terminal "
+            "YES/NO resolution yet. No performance claim "
+            "can be made."
+        )
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Resolved N",
+        primary.n,
+    )
+
+    c2.metric(
+        "B · Direct Brier",
+        (
+            f"{primary.mean_direct_brier:.4f}"
+            if primary.mean_direct_brier
+            is not None
+            else "—"
+        ),
+    )
+
+    c3.metric(
+        "C · Structured Brier",
+        (
+            f"{primary.mean_structured_brier:.4f}"
+            if primary.mean_structured_brier
+            is not None
+            else "—"
+        ),
+    )
+
+    c4.metric(
+        "D · + Market Brier",
+        (
+            f"{primary.mean_market_aware_brier:.4f}"
+            if primary.mean_market_aware_brier
+            is not None
+            else "—"
+        ),
+    )
+
+    st.write("")
+
+    a1, a2, a3 = st.columns(3)
+
+    a1.metric(
+        "A · Market Brier",
+        (
+            f"{primary.mean_market_brier:.4f}"
+            if primary.mean_market_brier
+            is not None
+            else "—"
+        ),
+    )
+
+    a2.metric(
+        "B → C paired effect",
+        (
+            f"{primary.mean_structured_advantage:+.4f}"
+            if primary.mean_structured_advantage
+            is not None
+            else "—"
+        ),
+        help=(
+            "Brier_B minus Brier_C. "
+            "Positive means structured independent "
+            "performed better."
+        ),
+    )
+
+    a3.metric(
+        "C → D paired effect",
+        (
+            f"{primary.mean_market_information_advantage:+.4f}"
+            if primary.mean_market_information_advantage
+            is not None
+            else "—"
+        ),
+        help=(
+            "Brier_C minus Brier_D. "
+            "Positive means adding market information "
+            "performed better."
+        ),
+    )
+
+    if primary_rows:
+        st.subheader(
+            "Primary observations"
+        )
+
+        primary_table = []
+
+        for row in primary_rows:
+            primary_table.append(
+                {
+                    "Market": row.question,
+                    "Outcome": (
+                        "YES"
+                        if row.outcome_yes
+                        else "NO"
+                    ),
+                    "A": probability(
+                        row.market_probability
+                    ),
+                    "B": probability(
+                        row.direct_probability
+                    ),
+                    "C": probability(
+                        row.structured_probability
+                    ),
+                    "D": probability(
+                        row.market_aware_probability
+                    ),
+                    "Brier A": (
+                        f"{row.market_brier:.4f}"
+                    ),
+                    "Brier B": (
+                        f"{row.direct_brier:.4f}"
+                    ),
+                    "Brier C": (
+                        f"{row.structured_brier:.4f}"
+                    ),
+                    "Brier D": (
+                        f"{row.market_aware_brier:.4f}"
+                    ),
+                    "B→C": (
+                        f"{row.structured_advantage:+.4f}"
+                    ),
+                    "C→D": (
+                        f"{row.market_information_advantage:+.4f}"
+                    ),
+                }
+            )
+
+        st.dataframe(
+            primary_table,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+
+    st.subheader(
+        "Secondary horizons"
+    )
+
+    st.caption(
+        "14d, 3d and 1d are evaluated separately. "
+        "Repeated checkpoints from the same market are "
+        "not treated as independent primary observations."
+    )
+
+    secondary_table = []
+
+    for (
+        horizon,
+        _rows,
+        summary,
+    ) in secondary:
+        secondary_table.append(
+            {
+                "Horizon": horizon,
+                "N": summary.n,
+                "A Market": (
+                    f"{summary.mean_market_brier:.4f}"
+                    if summary.mean_market_brier
+                    is not None
+                    else "—"
+                ),
+                "B Direct": (
+                    f"{summary.mean_direct_brier:.4f}"
+                    if summary.mean_direct_brier
+                    is not None
+                    else "—"
+                ),
+                "C Structured": (
+                    f"{summary.mean_structured_brier:.4f}"
+                    if summary.mean_structured_brier
+                    is not None
+                    else "—"
+                ),
+                "D + Market": (
+                    f"{summary.mean_market_aware_brier:.4f}"
+                    if summary.mean_market_aware_brier
+                    is not None
+                    else "—"
+                ),
+                "B→C": (
+                    f"{summary.mean_structured_advantage:+.4f}"
+                    if summary.mean_structured_advantage
+                    is not None
+                    else "—"
+                ),
+                "C→D": (
+                    f"{summary.mean_market_information_advantage:+.4f}"
+                    if summary.mean_market_information_advantage
+                    is not None
+                    else "—"
+                ),
+            }
+        )
+
+    st.dataframe(
+        secondary_table,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.divider()
+
+    st.caption(
+        "Log loss and directional accuracy are stored as "
+        "secondary metrics in the scoring engine. "
+        "Calibration claims remain disabled until at least "
+        "50 resolved markets exist for a condition."
     )
 
 
