@@ -250,3 +250,79 @@ def test_mismatched_packet_is_not_called_matched(
     con.close()
 
     assert load_matched_forecasts(path) == []
+
+
+def test_pipeline_status_requires_matched_lineage():
+    from forecast_ledger.dashboard_data import (
+        _derive_pipeline_status,
+    )
+
+    row = {
+        "condition_count": 3,
+        "packet_count": 1,
+        "snapshot_count": 1,
+        "model_count": 1,
+        "direct_probability": 0.2,
+        "structured_probability": 0.3,
+        "market_aware_probability": 0.25,
+        "retrieval_status": "succeeded",
+        "retrieval_error_type": None,
+        "retrieval_attempt_number": 1,
+        "has_valid_packet": True,
+    }
+
+    assert _derive_pipeline_status(row) == "matched"
+
+    row["packet_count"] = 2
+
+    assert (
+        _derive_pipeline_status(row)
+        != "matched"
+    )
+
+
+def test_pipeline_status_keeps_interrupted_retrieval_visible():
+    from forecast_ledger.dashboard_data import (
+        _derive_pipeline_status,
+    )
+
+    row = {
+        "condition_count": 0,
+        "packet_count": 0,
+        "snapshot_count": 0,
+        "model_count": 0,
+        "direct_probability": None,
+        "structured_probability": None,
+        "market_aware_probability": None,
+        "retrieval_status": "started",
+        "retrieval_error_type": None,
+        "retrieval_attempt_number": 3,
+        "has_valid_packet": False,
+    }
+
+    assert (
+        _derive_pipeline_status(row)
+        == "interrupted"
+    )
+
+
+def test_pipeline_status_blocks_auth_failure():
+    from forecast_ledger.dashboard_data import (
+        _derive_pipeline_status,
+    )
+
+    row = {
+        "condition_count": 0,
+        "packet_count": 0,
+        "snapshot_count": 0,
+        "model_count": 0,
+        "direct_probability": None,
+        "structured_probability": None,
+        "market_aware_probability": None,
+        "retrieval_status": "failed",
+        "retrieval_error_type": "AuthenticationError",
+        "retrieval_attempt_number": 1,
+        "has_valid_packet": False,
+    }
+
+    assert _derive_pipeline_status(row) == "blocked"

@@ -1,573 +1,698 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import streamlit as st
 
 from forecast_ledger.dashboard_data import (
+    PROTOCOL_VERSION,
+    load_checkpoint_attempt_audit,
     load_checkpoint_detail,
-    load_checkpoint_options,
+    load_checkpoint_evidence,
+    load_checkpoint_forecast_details,
     load_checkpoint_status_counts,
-    load_evidence_for_packet,
-    load_forecast_attempts_for_checkpoint,
-    load_forecasts_for_checkpoint,
-    load_matched_forecasts,
-    load_overview,
-    load_retrieval_attempts_for_checkpoint,
-    load_source_verifications_for_packet,
+    load_included_pipeline_rows,
+    load_research_funnel,
 )
 
-DEFAULT_DB_PATH = Path(
-    os.getenv(
-        "FORECAST_LEDGER_DB",
-        "data/forecast_ledger.db",
+DB_PATH = Path("data/forecast_ledger.db")
+
+
+def probability(value) -> str:
+    if value is None:
+        return "—"
+
+    return f"{100.0 * float(value):.1f}%"
+
+
+def status_label(value: str) -> str:
+    labels = {
+        "matched": "Matched",
+        "blocked": "Operationally blocked",
+        "interrupted": "Interrupted",
+        "retryable_retrieval": "Retryable retrieval",
+        "awaiting_evidence": "Awaiting evidence",
+        "partial_forecast": "Partial forecast",
+        "awaiting_forecast": "Awaiting forecast",
+    }
+
+    return labels.get(
+        value,
+        value.replace("_", " ").title(),
     )
-)
 
 
 st.set_page_config(
     page_title="Forecast Ledger",
-    page_icon="📡",
+    page_icon="◉",
     layout="wide",
 )
 
-
-def probability(value):
-    if value is None:
-        return "—"
-
-    return f"{100 * value:.1f}%"
-
-
-def checkpoint_label(row):
-    return (
-        f"{row['checkpoint']} · "
-        f"{row['market_id']} · "
-        f"{row['question']}"
-    )
-
-
-def render_probability_row(row):
-    columns = st.columns(4)
-
-    columns[0].metric(
-        "A · Market",
-        probability(row["market_probability"]),
-    )
-
-    columns[1].metric(
-        "B · Direct LLM",
-        probability(row["direct_probability"]),
-    )
-
-    columns[2].metric(
-        "C · Structured",
-        probability(row["structured_probability"]),
-    )
-
-    columns[3].metric(
-        "D · Structured + Market",
-        probability(row["market_aware_probability"]),
-    )
-
-
-def render_checkpoint_selector(options):
-    if not options:
-        st.info("No checkpoint records exist yet.")
-        return None
-
-    labels = {
-        checkpoint_label(row): (
-            row["market_id"],
-            row["checkpoint"],
-        )
-        for row in options
+st.markdown(
+    """
+    <style>
+    .block-container {
+        max-width: 1220px;
+        padding-top: 2rem;
+        padding-bottom: 4rem;
     }
 
-    selected_label = st.selectbox(
-        "Checkpoint",
-        options=list(labels),
-    )
-
-    return labels[selected_label]
-
-
-def render_checkpoint_detail(
-    db_path,
-    market_id,
-    checkpoint,
-):
-    detail = load_checkpoint_detail(
-        db_path,
-        market_id,
-        checkpoint,
-    )
-
-    if detail is None:
-        st.error("Checkpoint could not be loaded.")
-        return
-
-    st.header(detail["question"])
-    st.caption(
-        f"Market {market_id} · {checkpoint} checkpoint"
-    )
-
-    st.subheader("Resolution rules")
-    st.write(detail["resolution_rules"])
-
-    overview_columns = st.columns(4)
-
-    overview_columns[0].metric(
-        "Market P(YES)",
-        probability(
-            detail["market_probability"]
-        ),
-    )
-
-    overview_columns[1].metric(
-        "YES spread",
-        probability(
-            detail["yes_spread"]
-        ),
-    )
-
-    overview_columns[2].metric(
-        "Checkpoint state",
-        detail["checkpoint_status"],
-    )
-
-    overview_columns[3].metric(
-        "Semantic review",
-        detail["semantic_decision"] or "—",
-    )
-
-    st.subheader("Market snapshot")
-
-    st.write(
-        {
-            "snapshot_id": detail["snapshot_id"],
-            "observed_at": detail["observed_at"],
-            "yes_bid": detail["yes_bid"],
-            "yes_ask": detail["yes_ask"],
-            "no_bid": detail["no_bid"],
-            "no_ask": detail["no_ask"],
-            "no_implied_yes_probability": (
-                detail["no_implied_yes_probability"]
-            ),
-            "no_book_error": detail["no_book_error"],
-        }
-    )
-
-    if detail["semantic_reason"]:
-        st.subheader("Semantic decision")
-        st.write(detail["semantic_reason"])
-
-    forecasts = load_forecasts_for_checkpoint(
-        db_path,
-        market_id,
-        checkpoint,
-    )
-
-    if forecasts:
-        st.subheader("Model forecasts")
-
-        forecast_by_condition = {
-            row["condition"]: row
-            for row in forecasts
-        }
-
-        columns = st.columns(4)
-
-        columns[0].metric(
-            "A · Market",
-            probability(
-                detail["market_probability"]
-            ),
-        )
-
-        mapping = (
-            (
-                "B_direct",
-                "B · Direct",
-            ),
-            (
-                "C_structured_independent",
-                "C · Structured",
-            ),
-            (
-                "D_structured_market_aware",
-                "D · Structured + Market",
-            ),
-        )
-
-        for column, (condition, label) in zip(
-            columns[1:],
-            mapping,
-        ):
-            row = forecast_by_condition.get(
-                condition
-            )
-
-            column.metric(
-                label,
-                (
-                    probability(
-                        row["probability_yes"]
-                    )
-                    if row
-                    else "—"
-                ),
-            )
-
-        with st.expander(
-            "Structured model outputs"
-        ):
-            for forecast in forecasts:
-                st.markdown(
-                    f"**{forecast['condition']}**"
-                )
-                st.json(
-                    forecast["parsed_output"]
-                )
-
-    packet_id = detail["packet_id"]
-
-    if packet_id:
-        evidence = load_evidence_for_packet(
-            db_path,
-            packet_id,
-        )
-
-        st.subheader("Frozen evidence")
-
-        st.caption(
-            f"Packet {packet_id} · "
-            f"information cutoff "
-            f"{detail['information_cutoff']}"
-        )
-
-        if not evidence:
-            st.info(
-                "Valid zero-evidence packet."
-            )
-
-        for item in evidence:
-            with st.expander(
-                f"{item['position'] + 1}. "
-                f"{item['title']}"
-            ):
-                st.write(
-                    f"**Source:** "
-                    f"{item['source_name']}"
-                )
-                st.write(
-                    f"**Published:** "
-                    f"{item['published_at']}"
-                )
-                st.write(
-                    f"**Timestamp quality:** "
-                    f"{item['timestamp_quality']}"
-                )
-                st.write(item["excerpt"])
-                st.code(
-                    item["evidence_id"],
-                    language=None,
-                )
-                st.link_button(
-                    "Open source",
-                    item["source_url"],
-                )
-
-    st.subheader("Lineage")
-
-    lineage = {
-        "first_seen_at": detail["first_seen_at"],
-        "scheduled_at": detail["scheduled_at"],
-        "window_start": detail["window_start"],
-        "window_end": detail["window_end"],
-        "snapshot_id": detail["snapshot_id"],
-        "information_cutoff": detail[
-            "information_cutoff"
-        ],
-        "packet_id": packet_id,
-        "retrieval_response_id": detail[
-            "retrieval_response_id"
-        ],
-        "retrieval_model": detail[
-            "retrieval_model"
-        ],
-        "retrieval_prompt_version": detail[
-            "retrieval_prompt_version"
-        ],
-        "packet_validation": detail[
-            "packet_validation_status"
-        ],
+    [data-testid="stMetric"] {
+        border: 1px solid rgba(128,128,128,.22);
+        border-radius: 12px;
+        padding: 14px 16px;
     }
 
-    st.json(lineage)
+    .fl-kicker {
+        font-size: .78rem;
+        font-weight: 700;
+        letter-spacing: .12em;
+        opacity: .58;
+        text-transform: uppercase;
+        margin-bottom: .2rem;
+    }
 
-
-db_path = DEFAULT_DB_PATH
-
-st.title("Forecast Ledger")
-st.caption(
-    "Prospective, auditable AI forecasting experiment"
+    .fl-subtle {
+        opacity: .67;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-if not db_path.exists():
+
+if not DB_PATH.exists():
     st.error(
-        f"Database not found: {db_path}"
+        "Forecast Ledger database was not found."
     )
     st.stop()
 
+
+rows = load_included_pipeline_rows(
+    DB_PATH
+)
+
+funnel = load_research_funnel(
+    DB_PATH
+)
+
+
+st.sidebar.markdown(
+    "## Forecast Ledger"
+)
+st.sidebar.caption(
+    f"Prospective research ledger · {PROTOCOL_VERSION}"
+)
 
 page = st.sidebar.radio(
     "View",
     (
         "Overview",
-        "Forecasts",
         "Market detail",
         "Audit",
     ),
 )
 
+st.sidebar.divider()
+st.sidebar.caption(
+    "Read-only interface. Forecast generation and "
+    "research state changes live outside Streamlit."
+)
+
 
 if page == "Overview":
-    overview = load_overview(db_path)
-
-    st.subheader(
-        "Protocol v0.2 · GPT-5.4 mini · live"
+    st.markdown(
+        '<div class="fl-kicker">Live experiment</div>',
+        unsafe_allow_html=True,
     )
 
-    columns = st.columns(4)
+    st.title("Forecast Ledger")
 
-    columns[0].metric(
-        "Markets enrolled",
-        f"{overview['markets']:,}",
+    st.markdown(
+        """
+        A prospective test of whether structured reasoning
+        improves probabilistic forecasts from a fixed model.
+        Every forecast is frozen before the outcome and tied
+        to an auditable evidence packet.
+        """
     )
 
-    columns[1].metric(
-        "Snapshots",
-        f"{overview['snapshots']:,}",
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(
+        "Frozen snapshots",
+        funnel["snapshots"],
+    )
+    c2.metric(
+        "Machine eligible",
+        funnel["eligible"],
+    )
+    c3.metric(
+        "Semantically included",
+        funnel["included"],
+    )
+    c4.metric(
+        "Matched A/B/C/D",
+        funnel["matched"],
     )
 
-    columns[2].metric(
-        "Model forecasts",
-        f"{overview['forecasts']:,}",
+    st.write("")
+
+    st.subheader("Primary experiment")
+
+    primary_included = funnel[
+        "primary_included"
+    ]
+    primary_matched = funnel[
+        "primary_matched"
+    ]
+
+    coverage = (
+        primary_matched / primary_included
+        if primary_included
+        else 0.0
     )
 
-    columns[3].metric(
-        "Matched B/C/D sets",
-        f"{overview['matched_forecasts']:,}",
+    st.write(
+        f"**7-day checkpoint coverage:** "
+        f"{primary_matched}/{primary_included} "
+        f"({100 * coverage:.1f}%)"
     )
 
-    st.subheader("Completed matched forecasts")
+    st.progress(coverage)
 
-    matched = load_matched_forecasts(
-        db_path
+    st.caption(
+        "The 7-day checkpoint is the preregistered primary "
+        "horizon. Other horizons are analyzed separately."
     )
 
-    if not matched:
-        st.info(
-            "No complete B/C/D forecast sets yet."
+    st.divider()
+
+    st.subheader("Experiment ledger")
+
+    table_rows = []
+
+    for row in rows:
+        table_rows.append(
+            {
+                "Market": row["question"],
+                "Horizon": row["checkpoint"],
+                "A Market": probability(
+                    row["market_probability"]
+                ),
+                "B Direct": probability(
+                    row["direct_probability"]
+                ),
+                "C Structured": probability(
+                    row["structured_probability"]
+                ),
+                "D + Market": probability(
+                    row["market_aware_probability"]
+                ),
+                "Status": status_label(
+                    row["pipeline_status"]
+                ),
+            }
         )
-
-    for row in matched:
-        with st.container(border=True):
-            st.markdown(
-                f"### {row['question']}"
-            )
-            st.caption(
-                f"{row['checkpoint']} checkpoint · "
-                f"snapshot {row['observed_at']}"
-            )
-
-            render_probability_row(row)
-
-    st.subheader("Checkpoint coverage")
-
-    status_counts = (
-        load_checkpoint_status_counts(
-            db_path
-        )
-    )
 
     st.dataframe(
-        status_counts,
+        table_rows,
         use_container_width=True,
         hide_index=True,
     )
 
     st.caption(
-        "Dashboard is read-only. "
-        "No experimental state can be modified here."
+        "A is the frozen YES midpoint. B and C never receive "
+        "the market probability. D receives the matched "
+        "contemporaneous market probability."
     )
 
+    with st.expander(
+        "What do B, C and D mean?"
+    ):
+        st.markdown(
+            """
+            **B · Direct**
 
-elif page == "Forecasts":
-    matched = load_matched_forecasts(
-        db_path
-    )
+            Same fixed model, market question, resolution
+            rules and frozen evidence packet. Minimal
+            forecasting instruction. No market probability.
 
-    st.header("Matched forecasts")
+            **C · Structured independent**
 
-    if not matched:
-        st.info(
-            "No complete matched forecast sets yet."
+            Same model and evidence as B. The model must
+            explicitly state a reference class, estimated
+            base rate, strongest evidence for YES, strongest
+            evidence for NO, key uncertainty, and final
+            P(YES). No market probability.
+
+            **D · Structured + market**
+
+            Same structured procedure as C, plus the frozen
+            prediction-market probability.
+
+            Therefore **B → C** isolates the effect of the
+            structured forecasting procedure, while
+            **C → D** isolates the effect of adding market
+            information.
+            """
         )
 
-    for row in matched:
-        with st.container(border=True):
-            st.markdown(
-                f"### {row['question']}"
-            )
+    st.divider()
 
-            st.caption(
-                f"Market {row['market_id']} · "
-                f"{row['checkpoint']} · "
-                f"{row['observed_at']}"
-            )
+    st.subheader("Results")
 
-            render_probability_row(row)
-
-            st.caption(
-                f"Packet: {row['packet_id']}"
-            )
+    st.info(
+        "No forecasting-performance result is reported before "
+        "market settlement. Brier score, log loss and paired "
+        "condition comparisons will appear here only after "
+        "valid resolutions exist."
+    )
 
 
 elif page == "Market detail":
-    options = load_checkpoint_options(
-        db_path
+    st.title("Market detail")
+
+    if not rows:
+        st.info(
+            "No included checkpoints are available."
+        )
+        st.stop()
+
+    options = {
+        (
+            f"{row['checkpoint']} · "
+            f"{row['question']} · "
+            f"{row['market_id']}"
+        ): row
+        for row in rows
+    }
+
+    selected_label = st.selectbox(
+        "Checkpoint",
+        options.keys(),
     )
 
-    selected = render_checkpoint_selector(
-        options
+    selected = options[
+        selected_label
+    ]
+
+    market_id = selected["market_id"]
+    checkpoint = selected["checkpoint"]
+
+    detail = load_checkpoint_detail(
+        DB_PATH,
+        market_id,
+        checkpoint,
     )
 
-    if selected:
-        market_id, checkpoint = selected
-
-        render_checkpoint_detail(
-            db_path,
+    forecasts = (
+        load_checkpoint_forecast_details(
+            DB_PATH,
             market_id,
             checkpoint,
+        )
+    )
+
+    evidence = load_checkpoint_evidence(
+        DB_PATH,
+        market_id,
+        checkpoint,
+    )
+
+    audit = load_checkpoint_attempt_audit(
+        DB_PATH,
+        market_id,
+        checkpoint,
+    )
+
+    if detail is None:
+        st.error(
+            "Checkpoint detail is missing."
+        )
+        st.stop()
+
+    forecast_by_condition = {
+        item["condition"]: item
+        for item in forecasts
+    }
+
+    st.markdown(
+        f"### {detail['question']}"
+    )
+
+    st.caption(
+        f"{checkpoint} checkpoint · "
+        f"Market {market_id} · "
+        f"Status: "
+        f"{status_label(selected['pipeline_status'])}"
+    )
+
+    a, b, c, d = st.columns(4)
+
+    a.metric(
+        "A · Market",
+        probability(
+            detail["market_probability"]
+        ),
+    )
+
+    b.metric(
+        "B · Direct",
+        probability(
+            forecast_by_condition.get(
+                "B_direct",
+                {},
+            ).get("probability_yes")
+        ),
+    )
+
+    c.metric(
+        "C · Structured",
+        probability(
+            forecast_by_condition.get(
+                "C_structured_independent",
+                {},
+            ).get("probability_yes")
+        ),
+    )
+
+    d.metric(
+        "D · + Market",
+        probability(
+            forecast_by_condition.get(
+                "D_structured_market_aware",
+                {},
+            ).get("probability_yes")
+        ),
+    )
+
+    st.write("")
+
+    m1, m2, m3 = st.columns(3)
+
+    m1.markdown(
+        "**Frozen at**  \n"
+        f"{detail.get('observed_at') or '—'}"
+    )
+
+    m2.markdown(
+        "**YES spread**  \n"
+        + (
+            probability(
+                detail["yes_spread"]
+            )
+            if detail["yes_spread"]
+            is not None
+            else "—"
+        )
+    )
+
+    m3.markdown(
+        "**Evidence items**  \n"
+        f"{len(evidence)}"
+    )
+
+    with st.expander(
+        "Resolution rules"
+    ):
+        st.write(
+            detail["resolution_rules"]
+        )
+
+    st.divider()
+
+    st.subheader("Structured forecasts")
+
+    for condition in (
+        "C_structured_independent",
+        "D_structured_market_aware",
+    ):
+        forecast = forecast_by_condition.get(
+            condition
+        )
+
+        if forecast is None:
+            continue
+
+        title = (
+            "C · Structured independent"
+            if condition
+            == "C_structured_independent"
+            else "D · Structured + market"
+        )
+
+        with st.expander(
+            title,
+            expanded=True,
+        ):
+            analysis = forecast[
+                "analysis"
+            ]
+
+            st.write(
+                "**Reference class:**",
+                analysis.get(
+                    "reference_class"
+                )
+                or "—",
+            )
+
+            st.write(
+                "**Estimated base rate:**",
+                probability(
+                    analysis.get(
+                        "estimated_base_rate"
+                    )
+                ),
+            )
+
+            st.write(
+                "**Strongest evidence for YES:**",
+                analysis.get(
+                    "strongest_evidence_yes_assessment"
+                )
+                or "—",
+            )
+
+            st.write(
+                "**Strongest evidence for NO:**",
+                analysis.get(
+                    "strongest_evidence_no_assessment"
+                )
+                or "—",
+            )
+
+            st.write(
+                "**Key uncertainty:**",
+                analysis.get(
+                    "key_uncertainty"
+                )
+                or "—",
+            )
+
+    st.divider()
+
+    st.subheader("Frozen evidence")
+
+    if not evidence:
+        st.caption(
+            "No valid evidence packet exists "
+            "for this checkpoint."
+        )
+
+    for item in evidence:
+        with st.container(
+            border=True
+        ):
+            st.markdown(
+                f"**{item['title']}**"
+            )
+            st.caption(
+                f"{item['source_name']} · "
+                f"{item['published_at']} · "
+                f"{item['timestamp_quality']}"
+            )
+            st.write(
+                item["excerpt"]
+            )
+            st.markdown(
+                f"[Open source]({item['source_url']})"
+            )
+
+    st.divider()
+
+    st.subheader("Timeline")
+
+    timeline = []
+
+    if detail.get("observed_at"):
+        timeline.append(
+            {
+                "Time": detail["observed_at"],
+                "Event": "Market snapshot frozen",
+            }
+        )
+
+    if detail.get("reviewed_at"):
+        timeline.append(
+            {
+                "Time": detail["reviewed_at"],
+                "Event": (
+                    "Semantic review · "
+                    f"{detail['semantic_decision']}"
+                ),
+            }
+        )
+
+    for attempt in audit["retrieval"]:
+        event_time = (
+            attempt["completed_at"]
+            or attempt["requested_at"]
+        )
+
+        timeline.append(
+            {
+                "Time": event_time,
+                "Event": (
+                    "Retrieval attempt "
+                    f"{attempt['attempt_number']} · "
+                    f"{attempt['status']}"
+                ),
+            }
+        )
+
+    for forecast in forecasts:
+        timeline.append(
+            {
+                "Time": forecast[
+                    "forecast_created_at"
+                ],
+                "Event": (
+                    f"{forecast['condition']} "
+                    "forecast frozen"
+                ),
+            }
+        )
+
+    timeline.sort(
+        key=lambda item: item["Time"]
+    )
+
+    st.dataframe(
+        timeline,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander(
+        "Audit lineage"
+    ):
+        st.markdown(
+            "#### Forecast records"
+        )
+
+        for forecast in forecasts:
+            st.json(
+                {
+                    key: value
+                    for key, value
+                    in forecast.items()
+                    if key != "analysis"
+                }
+            )
+
+        st.markdown(
+            "#### Retrieval attempts"
+        )
+
+        st.dataframe(
+            audit["retrieval"],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.markdown(
+            "#### Forecast attempts"
+        )
+
+        st.dataframe(
+            audit["forecasts"],
+            use_container_width=True,
+            hide_index=True,
         )
 
 
 elif page == "Audit":
-    options = load_checkpoint_options(
-        db_path
+    st.title("Audit")
+
+    st.markdown(
+        """
+        Operational failures remain part of the experiment
+        ledger. They are never silently removed from coverage.
+        """
     )
 
-    selected = render_checkpoint_selector(
-        options
+    failures = [
+        row
+        for row in rows
+        if row["pipeline_status"]
+        != "matched"
+    ]
+
+    failure_table = [
+        {
+            "Market": row["question"],
+            "Horizon": row["checkpoint"],
+            "Status": status_label(
+                row["pipeline_status"]
+            ),
+            "Attempt": row[
+                "retrieval_attempt_number"
+            ],
+            "Error type": row[
+                "retrieval_error_type"
+            ],
+            "Error": row[
+                "retrieval_error_message"
+            ],
+        }
+        for row in failures
+    ]
+
+    st.subheader(
+        "Included checkpoints without matched forecasts"
     )
 
-    if selected:
-        market_id, checkpoint = selected
-
-        detail = load_checkpoint_detail(
-            db_path,
-            market_id,
-            checkpoint,
-        )
-
-        if detail is None:
-            st.error(
-                "Checkpoint could not be loaded."
-            )
-            st.stop()
-
-        st.header("Audit trail")
-        st.write(
-            detail["question"]
-        )
-
-        st.subheader("Checkpoint")
-        st.json(detail)
-
-        st.subheader("Retrieval attempts")
-
-        retrieval_attempts = (
-            load_retrieval_attempts_for_checkpoint(
-                db_path,
-                market_id,
-                checkpoint,
-            )
-        )
-
+    if failure_table:
         st.dataframe(
-            retrieval_attempts,
+            failure_table,
             use_container_width=True,
             hide_index=True,
         )
-
-        st.subheader("Forecast attempts")
-
-        forecast_attempts = (
-            load_forecast_attempts_for_checkpoint(
-                db_path,
-                market_id,
-                checkpoint,
-            )
+    else:
+        st.success(
+            "Every included checkpoint is matched."
         )
 
-        st.dataframe(
-            forecast_attempts,
-            use_container_width=True,
-            hide_index=True,
-        )
+    st.divider()
 
-        packet_id = detail["packet_id"]
+    st.subheader(
+        "Checkpoint ledger"
+    )
 
-        if packet_id:
-            st.subheader(
-                "Source verification"
-            )
+    st.dataframe(
+        load_checkpoint_status_counts(
+            DB_PATH
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
 
-            verifications = (
-                load_source_verifications_for_packet(
-                    db_path,
-                    packet_id,
-                )
-            )
+    st.divider()
 
-            st.dataframe(
-                verifications,
-                use_container_width=True,
-                hide_index=True,
-            )
+    st.subheader(
+        "Research funnel"
+    )
 
-        forecasts = (
-            load_forecasts_for_checkpoint(
-                db_path,
-                market_id,
-                checkpoint,
-            )
-        )
-
-        if forecasts:
-            st.subheader(
-                "Forecast lineage"
-            )
-
-            for forecast in forecasts:
-                with st.expander(
-                    forecast["condition"]
-                ):
-                    st.json(
-                        {
-                            key: value
-                            for key, value
-                            in forecast.items()
-                            if key
-                            != "parsed_output_json"
-                        }
-                    )
-
-
-st.sidebar.divider()
-st.sidebar.caption(
-    "Research engine → immutable SQLite ledger → read-only dashboard"
-)
+    st.json(funnel)

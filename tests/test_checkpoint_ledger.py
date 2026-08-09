@@ -165,3 +165,101 @@ def test_unavailable_checkpoint_is_persisted() -> None:
         record.status
         == CheckpointStatus.CHECKPOINT_UNAVAILABLE
     )
+
+
+def test_expired_pending_checkpoint_becomes_market_data_failure():
+    from datetime import UTC, datetime, timedelta
+
+    from forecast_ledger.checkpoint_ledger import (
+        CheckpointStatus,
+        create_checkpoint_record,
+        initialize_checkpoint_ledger,
+        mark_expired_pending_market_data_failure,
+    )
+    from forecast_ledger.checkpoints import Checkpoint
+
+    connection = sqlite3.connect(":memory:")
+    initialize_checkpoint_ledger(connection)
+
+    scheduled = datetime(
+        2026,
+        8,
+        8,
+        tzinfo=UTC,
+    )
+
+    create_checkpoint_record(
+        connection=connection,
+        market_id="m1",
+        checkpoint=Checkpoint.DAYS_7,
+        scheduled_at=scheduled,
+        window_start=scheduled - timedelta(hours=6),
+        window_end=scheduled + timedelta(hours=6),
+        status=CheckpointStatus.PENDING,
+        created_at=scheduled,
+    )
+
+    created = mark_expired_pending_market_data_failure(
+        connection=connection,
+        market_id="m1",
+        checkpoint=Checkpoint.DAYS_7,
+        evaluated_at=scheduled + timedelta(hours=7),
+    )
+
+    assert created is True
+
+    status = connection.execute(
+        """
+        SELECT status
+        FROM checkpoint_records
+        WHERE market_id = 'm1'
+        """
+    ).fetchone()[0]
+
+    assert status == "market_data_failure"
+
+
+def test_checkpoint_cannot_fail_before_window_expires():
+    from datetime import UTC, datetime, timedelta
+
+    import pytest
+
+    from forecast_ledger.checkpoint_ledger import (
+        CheckpointStatus,
+        create_checkpoint_record,
+        initialize_checkpoint_ledger,
+        mark_expired_pending_market_data_failure,
+    )
+    from forecast_ledger.checkpoints import Checkpoint
+
+    connection = sqlite3.connect(":memory:")
+    initialize_checkpoint_ledger(connection)
+
+    scheduled = datetime(
+        2026,
+        8,
+        8,
+        tzinfo=UTC,
+    )
+
+    create_checkpoint_record(
+        connection=connection,
+        market_id="m1",
+        checkpoint=Checkpoint.DAYS_7,
+        scheduled_at=scheduled,
+        window_start=scheduled - timedelta(hours=6),
+        window_end=scheduled + timedelta(hours=6),
+        status=CheckpointStatus.PENDING,
+        created_at=scheduled,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="has not expired",
+    ):
+        mark_expired_pending_market_data_failure(
+            connection=connection,
+            market_id="m1",
+            checkpoint=Checkpoint.DAYS_7,
+            evaluated_at=scheduled,
+        )

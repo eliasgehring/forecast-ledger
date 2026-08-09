@@ -164,3 +164,82 @@ def load_checkpoint_records(
         )
         for row in rows
     )
+
+
+def mark_expired_pending_market_data_failure(
+    connection: sqlite3.Connection,
+    market_id: str,
+    checkpoint: Checkpoint,
+    evaluated_at: datetime,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> bool:
+    require_timezone_aware(
+        evaluated_at,
+        "evaluated_at",
+    )
+
+    row = connection.execute(
+        """
+        SELECT
+            status,
+            window_end
+        FROM checkpoint_records
+        WHERE market_id = ?
+          AND checkpoint = ?
+          AND protocol_version = ?
+        """,
+        (
+            market_id,
+            checkpoint.value,
+            protocol_version,
+        ),
+    ).fetchone()
+
+    if row is None:
+        raise ValueError(
+            "Cannot close an unknown checkpoint."
+        )
+
+    status = CheckpointStatus(row[0])
+    window_end = datetime.fromisoformat(row[1])
+
+    if status == CheckpointStatus.MARKET_DATA_FAILURE:
+        return False
+
+    if status != CheckpointStatus.PENDING:
+        raise ValueError(
+            "Only a pending checkpoint can become "
+            "a market-data failure."
+        )
+
+    if evaluated_at <= window_end:
+        raise ValueError(
+            "Checkpoint window has not expired."
+        )
+
+    cursor = connection.execute(
+        """
+        UPDATE checkpoint_records
+        SET status = ?
+        WHERE market_id = ?
+          AND checkpoint = ?
+          AND protocol_version = ?
+          AND status = ?
+        """,
+        (
+            CheckpointStatus.MARKET_DATA_FAILURE.value,
+            market_id,
+            checkpoint.value,
+            protocol_version,
+            CheckpointStatus.PENDING.value,
+        ),
+    )
+
+    if cursor.rowcount != 1:
+        raise RuntimeError(
+            "Expected exactly one pending checkpoint."
+        )
+
+    connection.commit()
+
+    return True

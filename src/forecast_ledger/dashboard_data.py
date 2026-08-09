@@ -630,3 +630,509 @@ def load_forecast_attempts_for_checkpoint(
 
     finally:
         connection.close()
+
+
+def load_research_funnel(
+    db_path: str | Path,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> dict[str, int]:
+    connection = open_read_only_connection(db_path)
+
+    try:
+        snapshots = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM market_snapshots
+            WHERE protocol_version = ?
+            """,
+            (protocol_version,),
+        ).fetchone()[0]
+
+        eligible = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM machine_eligibility
+            WHERE protocol_version = ?
+              AND eligible_for_review = 1
+            """,
+            (protocol_version,),
+        ).fetchone()[0]
+
+        included = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM semantic_reviews
+            WHERE protocol_version = ?
+              AND decision = 'included'
+            """,
+            (protocol_version,),
+        ).fetchone()[0]
+
+        matched = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT
+                    market_id,
+                    checkpoint
+                FROM forecasts
+                WHERE protocol_version = ?
+                GROUP BY market_id, checkpoint
+                HAVING
+                    COUNT(DISTINCT condition) = 3
+                    AND COUNT(DISTINCT packet_id) = 1
+                    AND COUNT(DISTINCT snapshot_id) = 1
+                    AND COUNT(DISTINCT model) = 1
+            )
+            """,
+            (protocol_version,),
+        ).fetchone()[0]
+
+        primary_included = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM semantic_reviews
+            WHERE protocol_version = ?
+              AND decision = 'included'
+              AND checkpoint = '7d'
+            """,
+            (protocol_version,),
+        ).fetchone()[0]
+
+        primary_matched = connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM (
+                SELECT market_id
+                FROM forecasts
+                WHERE protocol_version = ?
+                  AND checkpoint = '7d'
+                GROUP BY market_id
+                HAVING
+                    COUNT(DISTINCT condition) = 3
+                    AND COUNT(DISTINCT packet_id) = 1
+                    AND COUNT(DISTINCT snapshot_id) = 1
+                    AND COUNT(DISTINCT model) = 1
+            )
+            """,
+            (protocol_version,),
+        ).fetchone()[0]
+
+        return {
+            "snapshots": snapshots,
+            "eligible": eligible,
+            "included": included,
+            "matched": matched,
+            "primary_included": primary_included,
+            "primary_matched": primary_matched,
+        }
+
+    finally:
+        connection.close()
+
+
+def _derive_pipeline_status(
+    row: dict[str, Any],
+) -> str:
+    matched = (
+        row["condition_count"] == 3
+        and row["packet_count"] == 1
+        and row["snapshot_count"] == 1
+        and row["model_count"] == 1
+        and row["direct_probability"] is not None
+        and row["structured_probability"] is not None
+        and row["market_aware_probability"] is not None
+    )
+
+    if matched:
+        return "matched"
+
+    if row["retrieval_status"] == "started":
+        return "interrupted"
+
+    if row["retrieval_status"] == "failed":
+        if (
+            row["retrieval_error_type"]
+            == "AuthenticationError"
+            or (
+                row["retrieval_attempt_number"]
+                is not None
+                and row["retrieval_attempt_number"] >= 3
+            )
+        ):
+            return "blocked"
+
+        return "retryable_retrieval"
+
+    if not row["has_valid_packet"]:
+        return "awaiting_evidence"
+
+    if 0 < row["condition_count"] < 3:
+        return "partial_forecast"
+
+    return "awaiting_forecast"
+
+
+def load_included_pipeline_rows(
+    db_path: str | Path,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> list[dict[str, Any]]:
+    connection = open_read_only_connection(db_path)
+
+    try:
+        rows = connection.execute(
+            """
+            WITH forecast_summary AS (
+                SELECT
+                    market_id,
+                    checkpoint,
+                    COUNT(DISTINCT condition)
+                        AS condition_count,
+                    COUNT(DISTINCT packet_id)
+                        AS packet_count,
+                    COUNT(DISTINCT snapshot_id)
+                        AS snapshot_count,
+                    COUNT(DISTINCT model)
+                        AS model_count,
+
+                    MAX(
+                        CASE
+                            WHEN condition = 'B_direct'
+                            THEN probability_yes
+                        END
+                    ) AS direct_probability,
+
+                    MAX(
+                        CASE
+                            WHEN condition =
+                                'C_structured_independent'
+                            THEN probability_yes
+                        END
+                    ) AS structured_probability,
+
+                    MAX(
+                        CASE
+                            WHEN condition =
+                                'D_structured_market_aware'
+                            THEN probability_yes
+                        END
+                    ) AS market_aware_probability
+
+                FROM forecasts
+                WHERE protocol_version = ?
+                GROUP BY market_id, checkpoint
+            ),
+
+            latest_retrieval_number AS (
+                SELECT
+                    market_id,
+                    checkpoint,
+                    protocol_version,
+                    MAX(attempt_number) AS attempt_number
+                FROM retrieval_attempts
+                WHERE protocol_version = ?
+                GROUP BY
+                    market_id,
+                    checkpoint,
+                    protocol_version
+            ),
+
+            latest_retrieval AS (
+                SELECT
+                    ra.market_id,
+                    ra.checkpoint,
+                    ra.attempt_number,
+                    ra.status,
+                    ra.error_type,
+                    ra.error_message
+                FROM retrieval_attempts AS ra
+                JOIN latest_retrieval_number AS latest
+                  ON latest.market_id = ra.market_id
+                 AND latest.checkpoint = ra.checkpoint
+                 AND latest.protocol_version =
+                     ra.protocol_version
+                 AND latest.attempt_number =
+                     ra.attempt_number
+            )
+
+            SELECT
+                sr.market_id,
+                sr.checkpoint,
+                tm.question,
+                ms.observed_at,
+
+                (
+                    ms.yes_bid + ms.yes_ask
+                ) / 2.0 AS market_probability,
+
+                COALESCE(fs.condition_count, 0)
+                    AS condition_count,
+                COALESCE(fs.packet_count, 0)
+                    AS packet_count,
+                COALESCE(fs.snapshot_count, 0)
+                    AS snapshot_count,
+                COALESCE(fs.model_count, 0)
+                    AS model_count,
+
+                fs.direct_probability,
+                fs.structured_probability,
+                fs.market_aware_probability,
+
+                latest.attempt_number
+                    AS retrieval_attempt_number,
+                latest.status
+                    AS retrieval_status,
+                latest.error_type
+                    AS retrieval_error_type,
+                latest.error_message
+                    AS retrieval_error_message,
+
+                EXISTS (
+                    SELECT 1
+                    FROM evidence_packets AS ep
+                    JOIN evidence_packet_validations AS epv
+                      ON epv.packet_id = ep.packet_id
+                    WHERE ep.market_id = sr.market_id
+                      AND ep.checkpoint = sr.checkpoint
+                      AND ep.protocol_version =
+                          sr.protocol_version
+                      AND epv.status = 'valid'
+                ) AS has_valid_packet
+
+            FROM semantic_reviews AS sr
+
+            JOIN tracked_markets AS tm
+              ON tm.market_id = sr.market_id
+             AND tm.protocol_version =
+                 sr.protocol_version
+
+            JOIN market_snapshots AS ms
+              ON ms.market_id = sr.market_id
+             AND ms.checkpoint = sr.checkpoint
+             AND ms.protocol_version =
+                 sr.protocol_version
+
+            LEFT JOIN forecast_summary AS fs
+              ON fs.market_id = sr.market_id
+             AND fs.checkpoint = sr.checkpoint
+
+            LEFT JOIN latest_retrieval AS latest
+              ON latest.market_id = sr.market_id
+             AND latest.checkpoint = sr.checkpoint
+
+            WHERE sr.protocol_version = ?
+              AND sr.decision = 'included'
+
+            ORDER BY
+                CASE sr.checkpoint
+                    WHEN '7d' THEN 0
+                    WHEN '14d' THEN 1
+                    WHEN '3d' THEN 2
+                    WHEN '1d' THEN 3
+                    ELSE 4
+                END,
+                ms.observed_at DESC,
+                sr.market_id
+            """,
+            (
+                protocol_version,
+                protocol_version,
+                protocol_version,
+            ),
+        ).fetchall()
+
+        result = []
+
+        for row in rows:
+            item = dict(row)
+            item["has_valid_packet"] = bool(
+                item["has_valid_packet"]
+            )
+            item["pipeline_status"] = (
+                _derive_pipeline_status(item)
+            )
+            result.append(item)
+
+        return result
+
+    finally:
+        connection.close()
+
+
+def load_checkpoint_evidence(
+    db_path: str | Path,
+    market_id: str,
+    checkpoint: str,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> list[dict[str, Any]]:
+    connection = open_read_only_connection(db_path)
+
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+                epi.position,
+                ei.evidence_id,
+                ei.source_url,
+                ei.source_name,
+                ei.title,
+                ei.published_at,
+                ei.retrieved_at,
+                ei.excerpt,
+                ei.timestamp_quality
+            FROM evidence_packets AS ep
+
+            JOIN evidence_packet_validations AS epv
+              ON epv.packet_id = ep.packet_id
+             AND epv.status = 'valid'
+
+            JOIN evidence_packet_items AS epi
+              ON epi.packet_id = ep.packet_id
+
+            JOIN evidence_items AS ei
+              ON ei.evidence_id = epi.evidence_id
+
+            WHERE ep.market_id = ?
+              AND ep.checkpoint = ?
+              AND ep.protocol_version = ?
+
+            ORDER BY epi.position
+            """,
+            (
+                market_id,
+                checkpoint,
+                protocol_version,
+            ),
+        ).fetchall()
+
+        return _rows_as_dicts(rows)
+
+    finally:
+        connection.close()
+
+
+def load_checkpoint_forecast_details(
+    db_path: str | Path,
+    market_id: str,
+    checkpoint: str,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> list[dict[str, Any]]:
+    connection = open_read_only_connection(db_path)
+
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+                condition,
+                probability_yes,
+                parsed_output_json,
+                forecast_created_at,
+                packet_id,
+                snapshot_id,
+                model,
+                reasoning_effort,
+                prompt_version,
+                prompt_sha256,
+                attempt_number,
+                response_id,
+                protocol_commit,
+                code_commit
+            FROM forecasts
+            WHERE market_id = ?
+              AND checkpoint = ?
+              AND protocol_version = ?
+            ORDER BY condition
+            """,
+            (
+                market_id,
+                checkpoint,
+                protocol_version,
+            ),
+        ).fetchall()
+
+        result = []
+
+        for row in rows:
+            item = dict(row)
+            item["analysis"] = json.loads(
+                item.pop("parsed_output_json")
+            )
+            result.append(item)
+
+        return result
+
+    finally:
+        connection.close()
+
+
+def load_checkpoint_attempt_audit(
+    db_path: str | Path,
+    market_id: str,
+    checkpoint: str,
+    protocol_version: str = PROTOCOL_VERSION,
+) -> dict[str, list[dict[str, Any]]]:
+    connection = open_read_only_connection(db_path)
+
+    try:
+        retrieval = connection.execute(
+            """
+            SELECT
+                attempt_number,
+                model,
+                prompt_version,
+                requested_at,
+                completed_at,
+                response_id,
+                status,
+                error_type,
+                error_message
+            FROM retrieval_attempts
+            WHERE market_id = ?
+              AND checkpoint = ?
+              AND protocol_version = ?
+            ORDER BY attempt_number
+            """,
+            (
+                market_id,
+                checkpoint,
+                protocol_version,
+            ),
+        ).fetchall()
+
+        forecasts = connection.execute(
+            """
+            SELECT
+                condition,
+                attempt_number,
+                model,
+                reasoning_effort,
+                prompt_version,
+                prompt_sha256,
+                requested_at,
+                completed_at,
+                response_id,
+                status,
+                error_type,
+                error_message,
+                protocol_commit,
+                code_commit
+            FROM forecast_attempts
+            WHERE market_id = ?
+              AND checkpoint = ?
+              AND protocol_version = ?
+            ORDER BY condition, attempt_number
+            """,
+            (
+                market_id,
+                checkpoint,
+                protocol_version,
+            ),
+        ).fetchall()
+
+        return {
+            "retrieval": _rows_as_dicts(retrieval),
+            "forecasts": _rows_as_dicts(forecasts),
+        }
+
+    finally:
+        connection.close()
