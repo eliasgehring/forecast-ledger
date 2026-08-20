@@ -364,3 +364,88 @@ def test_one_fetch_failure_does_not_abort_sweep() -> None:
         bad_status
         == CheckpointStatus.PENDING.value
     )
+
+
+def test_fresh_snapshot_observed_after_iteration_start_is_valid() -> None:
+    connection = make_connection()
+
+    market = tracked_market(
+        "m1"
+    )
+
+    observed_at = (
+        NOW + timedelta(seconds=1)
+    )
+
+    fetched = FetchedMarketSnapshot(
+        snapshot=MarketSnapshot(
+            snapshot_id=(
+                f"m1:{observed_at.isoformat()}"
+            ),
+            market_id="m1",
+            observed_at=observed_at,
+            yes_bid=0.20,
+            yes_ask=0.22,
+            no_bid=0.78,
+            no_ask=0.80,
+        ),
+        yes_book={
+            "bids": [
+                {"price": "0.20"}
+            ],
+            "asks": [
+                {"price": "0.22"}
+            ],
+        },
+        no_book={
+            "bids": [
+                {"price": "0.78"}
+            ],
+            "asks": [
+                {"price": "0.80"}
+            ],
+        },
+        no_book_error=None,
+    )
+
+    report = run_scheduler_iteration(
+        connection=connection,
+        tracked_markets=(market,),
+        evaluated_at=NOW,
+        snapshot_fetcher=lambda _: fetched,
+    )
+
+    assert report.snapshots_created == 1
+    assert (
+        report.eligibility_decisions_created
+        == 1
+    )
+
+    row = connection.execute(
+        """
+        SELECT
+            snapshot_id,
+            evaluated_at
+        FROM machine_eligibility
+        WHERE market_id = 'm1'
+          AND checkpoint = '7d'
+          AND protocol_version = ?
+        """,
+        (PROTOCOL_VERSION,),
+    ).fetchone()
+
+    assert row is not None
+    assert row[0] == (
+        fetched.snapshot.snapshot_id
+    )
+
+    eligibility_time = (
+        datetime.fromisoformat(
+            row[1]
+        )
+    )
+
+    assert (
+        eligibility_time
+        >= fetched.snapshot.observed_at
+    )

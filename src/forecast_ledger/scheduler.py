@@ -335,7 +335,10 @@ def run_scheduler_iteration(
             market=market,
             snapshot=fetched.snapshot,
             checkpoint=due.checkpoint,
-            evaluated_at=evaluated_at,
+            evaluated_at=max(
+                evaluated_at,
+                fetched.snapshot.observed_at,
+            ),
             protocol_version=PROTOCOL_VERSION,
         )
 
