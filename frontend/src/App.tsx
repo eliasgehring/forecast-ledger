@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import "./App.css";
 import MarketDetail from "./MarketDetail";
+import ResultsView from "./ResultsView";
 
 type Page = "overview" | "results" | "markets" | "audit";
 
@@ -90,10 +91,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 
   return response.json() as Promise<T>;
-}
-
-function fmt(value: number | null, digits = 4): string {
-  return value === null ? "—" : value.toFixed(digits);
 }
 
 function pct(value: number | null): string {
@@ -356,80 +353,19 @@ export default function App() {
         </>
       )}
 
-      {page === "results" && (
-        <>
-          <section className="section-head">
-            <div>
-              <div className="kicker">Primary experiment</div>
-              <h2>Resolved 7-day forecasts</h2>
-            </div>
-
-            <div className="n-pill">N = {results.summary.n}</div>
-          </section>
-
-          <section className="results-grid">
-            <ScoreCard
-              label="A Market"
-              value={results.summary.mean_market_brier}
-            />
-            <ScoreCard
-              label="B Direct"
-              value={results.summary.mean_direct_brier}
-            />
-            <ScoreCard
-              label="C Structured"
-              value={results.summary.mean_structured_brier}
-            />
-            <ScoreCard
-              label="D + Market"
-              value={results.summary.mean_market_aware_brier}
-            />
-          </section>
-
-          <section className="panel">
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Market</th>
-                    <th>Outcome</th>
-                    <th>A</th>
-                    <th>B</th>
-                    <th>C</th>
-                    <th>D</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {results.rows.map((row) => (
-                    <tr key={`${row.market_id}-${row.checkpoint}`}>
-                      <td>
-                        <div className="question">{row.question}</div>
-                        <div className="row-meta">
-                          {row.market_id} · {row.checkpoint}
-                        </div>
-                      </td>
-
-                      <td>
-                        <span className="outcome-pill">
-                          {row.outcome_yes ? "YES" : "NO"}
-                        </span>
-                      </td>
-
-                      <td>{fmt(row.market_brier)}</td>
-                      <td>{fmt(row.direct_brier)}</td>
-                      <td>{fmt(row.structured_brier)}</td>
-                      <td>{fmt(row.market_aware_brier)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </>
+      {!selectedMarket && page === "results" && (
+        <ResultsView
+          funnel={funnel}
+          onOpenMarket={(marketId, checkpoint) =>
+            setSelectedMarket({
+              marketId,
+              checkpoint,
+            })
+          }
+        />
       )}
 
-      {page === "markets" && (
+      {!selectedMarket && page === "markets" && (
         <>
           <section className="section-head">
             <div>
@@ -494,7 +430,7 @@ export default function App() {
         </>
       )}
 
-      {page === "audit" && (
+      {!selectedMarket && page === "audit" && (
         <section className="audit-grid">
           <article className="panel">
             <div className="kicker">Research authority</div>
@@ -592,22 +528,6 @@ function Effect({
       </div>
       <div className="formula">{formula}</div>
     </div>
-  );
-}
-
-function ScoreCard({
-  label,
-  value,
-}: {
-  label: string;
-  value: number | null;
-}) {
-  return (
-    <article className="score-card">
-      <div className="metric-label">{label}</div>
-      <div className="score-value">{fmt(value)}</div>
-      <div className="row-meta">Mean Brier · lower is better</div>
-    </article>
   );
 }
 
