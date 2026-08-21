@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from forecast_ledger.checkpoints import Checkpoint
 from forecast_ledger.dashboard_data import (
@@ -235,6 +236,22 @@ def create_app(
 
         finally:
             connection.close()
+
+    frontend_dist = (
+        Path(__file__).resolve().parents[2]
+        / "frontend"
+        / "dist"
+    )
+
+    if frontend_dist.exists():
+        app.mount(
+            "/",
+            StaticFiles(
+                directory=frontend_dist,
+                html=True,
+            ),
+            name="frontend",
+        )
 
     return app
 
