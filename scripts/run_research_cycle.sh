@@ -14,6 +14,42 @@ echo "FORECAST LEDGER RESEARCH CYCLE"
 echo "========================================"
 
 echo
+echo "[preflight] Git integrity"
+
+if [ -n "$(git status --porcelain)" ]; then
+  echo
+  echo "ERROR: working tree is not clean."
+  git status --short
+  exit 10
+fi
+
+echo "git tree: clean"
+
+echo
+echo "[preflight] OpenAI credentials"
+
+if [ -z "${OPENAI_API_KEY:-}" ]; then
+  KEY="$(
+    security find-generic-password       -s forecast-ledger-openai       -a "$USER"       -w       2>/dev/null       || true
+  )"
+
+  if [ -z "$KEY" ]; then
+    echo
+    echo "ERROR: OpenAI API key unavailable."
+    exit 11
+  fi
+
+  export OPENAI_API_KEY="$KEY"
+fi
+
+python - <<'PY_INNER'
+from openai import OpenAI
+
+OpenAI().models.list()
+print("OpenAI preflight: OK")
+PY_INNER
+
+echo
 echo "[1/6] Enrollment"
 python -m forecast_ledger.enrollment \
   --execute
