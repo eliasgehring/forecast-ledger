@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import ExperimentHealthPanel from "./ExperimentHealthPanel";
 
 type Checkpoint =
   | "7d"
@@ -708,6 +709,8 @@ export default function ResultsView({
           </div>
         )}
       </section>
+
+      <ExperimentHealthPanel />
 
       <section className="results-footnote">
         <strong>

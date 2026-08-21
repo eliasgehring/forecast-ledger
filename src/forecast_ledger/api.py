@@ -21,6 +21,7 @@ from forecast_ledger.dashboard_data import (
     load_source_verifications_for_packet,
     open_read_only_connection,
 )
+from forecast_ledger.experiment_health import summarize_experiment_health
 from forecast_ledger.registry import PROTOCOL_VERSION
 from forecast_ledger.results import (
     load_primary_results,
@@ -218,6 +219,51 @@ def create_app(
             "attempts": attempts,
             "source_verifications": (
                 source_verifications
+            ),
+        }
+
+    @app.get(
+        "/api/experiment-health"
+    )
+    def experiment_health() -> dict:
+        _require_database(path)
+
+        rows = (
+            load_included_pipeline_rows(
+                path
+            )
+        )
+
+        connection = (
+            open_read_only_connection(
+                path
+            )
+        )
+
+        try:
+            _, primary_summary = (
+                load_primary_results(
+                    connection
+                )
+            )
+        finally:
+            connection.close()
+
+        health = (
+            summarize_experiment_health(
+                rows,
+                primary_resolved_scored=(
+                    primary_summary.n
+                ),
+            )
+        )
+
+        return {
+            "protocol_version": (
+                PROTOCOL_VERSION
+            ),
+            "health": asdict(
+                health
             ),
         }
 
