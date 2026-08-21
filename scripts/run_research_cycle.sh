@@ -128,7 +128,7 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   KEY="$(
     security find-generic-password \
       -s forecast-ledger-openai \
-      -a "$USER" \
+      -a "${USER:-$(id -un)}" \
       -w \
       2>/dev/null \
       || true
