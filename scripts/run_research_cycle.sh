@@ -26,11 +26,112 @@ fi
 echo "git tree: clean"
 
 echo
-echo "[preflight] OpenAI credentials"
+echo "[1/6] Enrollment"
+
+python -m forecast_ledger.enrollment \
+  --execute
+
+echo
+echo "[2/6] Scheduler"
+
+python -m forecast_ledger.scheduler \
+  --execute
+
+echo
+echo "[3/6] Non-interactive semantic review gate"
+
+set +e
+
+REVIEW_OUTPUT="$(
+  python - <<'PY'
+import sqlite3
+from pathlib import Path
+
+from forecast_ledger.review import (
+    load_review_candidates,
+)
+
+db_path = Path(
+    "data/forecast_ledger.db"
+).resolve()
+
+connection = sqlite3.connect(
+    f"file:{db_path}?mode=ro",
+    uri=True,
+)
+
+try:
+    candidates = (
+        load_review_candidates(
+            connection
+        )
+    )
+finally:
+    connection.close()
+
+if not candidates:
+    print(
+        "Semantic review queue is empty."
+    )
+    raise SystemExit(0)
+
+print(
+    "Semantic review required:",
+    len(candidates),
+    "checkpoint(s)",
+)
+
+for candidate in candidates:
+    print(
+        candidate.market_id,
+        candidate.checkpoint.value,
+        "|",
+        candidate.question,
+    )
+
+raise SystemExit(2)
+PY
+)"
+
+REVIEW_STATUS=$?
+
+set -e
+
+echo "$REVIEW_OUTPUT"
+
+if [ "$REVIEW_STATUS" -eq 2 ]; then
+  echo
+  echo "========================================"
+  echo "HUMAN REVIEW REQUIRED"
+  echo "========================================"
+  echo
+  echo "No retrieval or forecasting was started."
+  echo
+  echo "Run:"
+  echo "python -m forecast_ledger.review"
+  echo
+  echo "Then rerun:"
+  echo "./scripts/run_research_cycle.sh"
+  exit 2
+fi
+
+if [ "$REVIEW_STATUS" -ne 0 ]; then
+  echo
+  echo "ERROR: semantic review gate failed."
+  exit "$REVIEW_STATUS"
+fi
+
+echo
+echo "[4/6] OpenAI preflight"
 
 if [ -z "${OPENAI_API_KEY:-}" ]; then
   KEY="$(
-    security find-generic-password       -s forecast-ledger-openai       -a "$USER"       -w       2>/dev/null       || true
+    security find-generic-password \
+      -s forecast-ledger-openai \
+      -a "$USER" \
+      -w \
+      2>/dev/null \
+      || true
   )"
 
   if [ -z "$KEY" ]; then
@@ -42,57 +143,41 @@ if [ -z "${OPENAI_API_KEY:-}" ]; then
   export OPENAI_API_KEY="$KEY"
 fi
 
-python - <<'PY_INNER'
+python - <<'PY'
 from openai import OpenAI
 
 OpenAI().models.list()
-print("OpenAI preflight: OK")
-PY_INNER
+
+print(
+    "OpenAI preflight: OK"
+)
+PY
 
 echo
-echo "[1/6] Enrollment"
-python -m forecast_ledger.enrollment \
-  --execute
+echo "[5/6] Forecast pipeline"
 
-echo
-echo "[2/6] Scheduler"
-python -m forecast_ledger.scheduler \
-  --execute
-
-echo
-echo "[3/6] Semantic review check"
-REVIEW_OUTPUT="$(
-  python -m forecast_ledger.review
-)"
-
-echo "$REVIEW_OUTPUT"
-
-if ! echo "$REVIEW_OUTPUT" \
-  | grep -q \
-  "Semantic review queue is empty."
-then
-  echo
-  echo "========================================"
-  echo "HUMAN REVIEW REQUIRED"
-  echo "========================================"
-  echo
-  echo "Cycle stopped before retrieval/forecasting."
-  echo "Complete semantic review, then rerun this script."
-  exit 2
-fi
-
-echo
-echo "[4/6] Forecast pipeline"
 python -m forecast_ledger.pipeline \
   --execute
 
+PIPELINE_STATUS=$?
+
+if [ "$PIPELINE_STATUS" -ne 0 ]; then
+  echo
+  echo "ERROR: forecast pipeline failed."
+  exit "$PIPELINE_STATUS"
+fi
+
 echo
-echo "[5/6] Resolution sweep"
+echo "[6/6] Resolution sweep"
+
 python -m forecast_ledger.resolution \
   --execute
 
 echo
-echo "[6/6] Operations status"
+echo "========================================"
+echo "OPERATIONS STATUS"
+echo "========================================"
+
 python -m forecast_ledger.ops
 
 echo
