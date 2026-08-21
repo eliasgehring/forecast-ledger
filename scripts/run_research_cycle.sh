@@ -28,8 +28,12 @@ echo "git tree: clean"
 echo
 echo "[1/6] Enrollment"
 
-python -m forecast_ledger.enrollment \
-  --execute
+if [ "${FORECAST_LEDGER_SKIP_ENROLLMENT:-0}" = "1" ]; then
+  echo "Enrollment skipped for this cycle."
+else
+  python -m forecast_ledger.enrollment \
+    --execute
+fi
 
 echo
 echo "[2/6] Scheduler"

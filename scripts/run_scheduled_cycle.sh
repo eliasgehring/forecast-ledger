@@ -4,6 +4,9 @@ set -u
 
 cd "$(dirname "$0")/.."
 
+export PYTHONUNBUFFERED=1
+export FORECAST_LEDGER_SKIP_ENROLLMENT=1
+
 STATE_DIR="$HOME/Library/Application Support/ForecastLedger/ops"
 
 mkdir -p "$STATE_DIR"
