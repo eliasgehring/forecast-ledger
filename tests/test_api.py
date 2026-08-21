@@ -31,7 +31,12 @@ def make_results_db(
         CREATE TABLE tracked_markets (
             market_id TEXT NOT NULL,
             protocol_version TEXT NOT NULL,
-            question TEXT NOT NULL
+            question TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            event_title TEXT NOT NULL,
+            event_slug TEXT NOT NULL,
+            categories_json TEXT NOT NULL,
+            tag_slugs_json TEXT NOT NULL
         );
 
         CREATE TABLE market_resolutions (
@@ -72,13 +77,32 @@ def make_results_db(
             INSERT INTO tracked_markets (
                 market_id,
                 protocol_version,
-                question
+                question,
+                event_id,
+                event_title,
+                event_slug,
+                categories_json,
+                tag_slugs_json
             )
-            VALUES (?, 'v0.2', ?)
+            VALUES (
+                ?,
+                'v0.2',
+                ?,
+                ?,
+                ?,
+                ?,
+                ?,
+                ?
+            )
             """,
             (
                 market_id,
                 f"Question {market_id}?",
+                f"event-{market_id}",
+                f"Event {market_id}",
+                f"event-{market_id}",
+                '["technology"]',
+                '["test"]',
             ),
         )
 

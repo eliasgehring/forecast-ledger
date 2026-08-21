@@ -18,7 +18,12 @@ def make_connection() -> sqlite3.Connection:
         CREATE TABLE tracked_markets (
             market_id TEXT,
             protocol_version TEXT,
-            question TEXT
+            question TEXT,
+            event_id TEXT,
+            event_title TEXT,
+            event_slug TEXT,
+            categories_json TEXT,
+            tag_slugs_json TEXT
         );
 
         CREATE TABLE market_snapshots (
@@ -63,12 +68,35 @@ def insert_matched(
 ) -> None:
     con.execute(
         """
-        INSERT INTO tracked_markets
-        VALUES (?, 'v0.2', ?)
+        INSERT INTO tracked_markets (
+            market_id,
+            protocol_version,
+            question,
+            event_id,
+            event_title,
+            event_slug,
+            categories_json,
+            tag_slugs_json
+        )
+        VALUES (
+            ?,
+            'v0.2',
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
+        )
         """,
         (
             market_id,
             f"Question {market_id}",
+            f"event-{market_id}",
+            f"Event {market_id}",
+            f"event-{market_id}",
+            '["technology"]',
+            '["test"]',
         ),
     )
 
@@ -306,3 +334,30 @@ def test_empty_summary_reports_no_fake_metrics() -> None:
     assert summary.n == 0
     assert summary.mean_direct_brier is None
     assert summary.mean_structured_brier is None
+
+
+def test_scored_checkpoint_preserves_event_identity() -> None:
+    con = make_connection()
+
+    insert_matched(
+        con,
+        market_id="identity-market",
+        checkpoint="7d",
+        outcome_yes=False,
+    )
+
+    rows = load_scored_checkpoints(
+        con,
+        checkpoint=Checkpoint.DAYS_7,
+    )
+
+    assert len(rows) == 1
+
+    row = rows[0]
+
+    assert row.market_id == "identity-market"
+    assert row.event_id == "event-identity-market"
+    assert row.event_title == "Event identity-market"
+    assert row.event_slug == "event-identity-market"
+    assert row.categories_json == '["technology"]'
+    assert row.tag_slugs_json == '["test"]'

@@ -140,6 +140,7 @@ def test_health_handles_empty_experiment():
 
     assert health.overall.checkpoints == 0
     assert health.overall.unique_markets == 0
+    assert health.overall.event_clusters == 0
     assert health.overall.matched == 0
     assert health.primary_7d.checkpoints == 0
     assert health.primary_resolved_scored == 0
@@ -147,3 +148,45 @@ def test_health_handles_empty_experiment():
         health.nonmatched_checkpoints
         == ()
     )
+
+
+def test_event_clusters_are_not_checkpoint_counts():
+    rows = [
+        {
+            "market_id": "m1",
+            "event_id": "event-a",
+            "checkpoint": "7d",
+            "pipeline_status": "matched",
+        },
+        {
+            "market_id": "m2",
+            "event_id": "event-a",
+            "checkpoint": "7d",
+            "pipeline_status": "matched",
+        },
+        {
+            "market_id": "m1",
+            "event_id": "event-a",
+            "checkpoint": "14d",
+            "pipeline_status": "matched",
+        },
+        {
+            "market_id": "m3",
+            "event_id": "event-b",
+            "checkpoint": "7d",
+            "pipeline_status": "matched",
+        },
+    ]
+
+    health = summarize_experiment_health(
+        rows,
+        primary_resolved_scored=0,
+    )
+
+    assert health.overall.checkpoints == 4
+    assert health.overall.unique_markets == 3
+    assert health.overall.event_clusters == 2
+
+    assert health.primary_7d.checkpoints == 3
+    assert health.primary_7d.unique_markets == 3
+    assert health.primary_7d.event_clusters == 2

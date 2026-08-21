@@ -6,6 +6,7 @@ import {
 type PipelineSlice = {
   checkpoints: number;
   unique_markets: number;
+  event_clusters: number;
 
   matched: number;
   blocked: number;
@@ -176,7 +177,7 @@ export default function ExperimentHealthPanel() {
         <HealthMetric
           label="Included checkpoints"
           value={overall.checkpoints}
-          note={`${overall.unique_markets} unique markets`}
+          note={`${overall.unique_markets} markets · ${overall.event_clusters} event clusters`}
         />
 
         <HealthMetric

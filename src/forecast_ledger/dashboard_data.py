@@ -858,7 +858,14 @@ def load_included_pipeline_rows(
             SELECT
                 sr.market_id,
                 sr.checkpoint,
+
+                tm.event_id,
+                tm.event_title,
+                tm.event_slug,
+                tm.categories_json,
+                tm.tag_slugs_json,
                 tm.question,
+
                 ms.observed_at,
 
                 (

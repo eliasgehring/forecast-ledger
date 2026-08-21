@@ -16,6 +16,12 @@ from forecast_ledger.registry import PROTOCOL_VERSION
 @dataclass(frozen=True)
 class ScoredCheckpoint:
     market_id: str
+    event_id: str
+    event_title: str
+    event_slug: str
+    categories_json: str
+    tag_slugs_json: str
+
     question: str
     checkpoint: Checkpoint
     outcome_yes: bool
@@ -124,6 +130,11 @@ def load_scored_checkpoints(
 
         SELECT
             fs.market_id,
+            tm.event_id,
+            tm.event_title,
+            tm.event_slug,
+            tm.categories_json,
+            tm.tag_slugs_json,
             tm.question,
             fs.checkpoint,
             mr.outcome_yes,
@@ -192,21 +203,21 @@ def load_scored_checkpoints(
     scored = []
 
     for row in rows:
-        outcome_yes = bool(row[3])
+        outcome_yes = bool(row[8])
 
         market_probability = (
-            float(row[4])
-            + float(row[5])
+            float(row[9])
+            + float(row[10])
         ) / 2.0
 
         direct_probability = float(
-            row[6]
+            row[11]
         )
         structured_probability = float(
-            row[7]
+            row[12]
         )
         market_aware_probability = float(
-            row[8]
+            row[13]
         )
 
         market_brier = brier_score(
@@ -229,9 +240,14 @@ def load_scored_checkpoints(
         scored.append(
             ScoredCheckpoint(
                 market_id=row[0],
-                question=row[1],
+                event_id=row[1],
+                event_title=row[2],
+                event_slug=row[3],
+                categories_json=row[4],
+                tag_slugs_json=row[5],
+                question=row[6],
                 checkpoint=Checkpoint(
-                    row[2]
+                    row[7]
                 ),
                 outcome_yes=outcome_yes,
                 market_probability=(

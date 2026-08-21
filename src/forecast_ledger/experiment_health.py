@@ -19,6 +19,7 @@ KNOWN_STATUSES = (
 class PipelineSlice:
     checkpoints: int
     unique_markets: int
+    event_clusters: int
 
     matched: int
     blocked: int
@@ -94,10 +95,19 @@ def _summarize_slice(
         if row.get("market_id")
     }
 
+    event_ids = {
+        str(row["event_id"])
+        for row in rows
+        if row.get("event_id")
+    }
+
     return PipelineSlice(
         checkpoints=len(rows),
         unique_markets=len(
             market_ids
+        ),
+        event_clusters=len(
+            event_ids
         ),
         matched=status_counts.get(
             "matched",
