@@ -11,10 +11,14 @@ from fastapi.staticfiles import StaticFiles
 
 from forecast_ledger.checkpoints import Checkpoint
 from forecast_ledger.dashboard_data import (
+    load_checkpoint_attempt_audit,
     load_checkpoint_detail,
+    load_checkpoint_evidence,
+    load_checkpoint_forecast_details,
     load_included_pipeline_rows,
     load_overview,
     load_research_funnel,
+    load_source_verifications_for_packet,
     open_read_only_connection,
 )
 from forecast_ledger.registry import PROTOCOL_VERSION
@@ -169,11 +173,52 @@ def create_app(
                 ),
             )
 
+        evidence = load_checkpoint_evidence(
+            db_path=path,
+            market_id=market_id,
+            checkpoint=checkpoint.value,
+        )
+
+        forecasts = (
+            load_checkpoint_forecast_details(
+                db_path=path,
+                market_id=market_id,
+                checkpoint=checkpoint.value,
+            )
+        )
+
+        attempts = (
+            load_checkpoint_attempt_audit(
+                db_path=path,
+                market_id=market_id,
+                checkpoint=checkpoint.value,
+            )
+        )
+
+        packet_id = detail.get(
+            "packet_id"
+        )
+
+        source_verifications = (
+            []
+            if not packet_id
+            else load_source_verifications_for_packet(
+                db_path=path,
+                packet_id=packet_id,
+            )
+        )
+
         return {
             "protocol_version": (
                 PROTOCOL_VERSION
             ),
             "market": detail,
+            "evidence": evidence,
+            "forecasts": forecasts,
+            "attempts": attempts,
+            "source_verifications": (
+                source_verifications
+            ),
         }
 
     @app.get("/api/results/primary")

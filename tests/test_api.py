@@ -349,3 +349,103 @@ def test_database_connection_is_physically_read_only(
             )
     finally:
         connection.close()
+
+
+def test_market_detail_composes_existing_read_models(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import forecast_ledger.api as api_module
+
+    db_path = tmp_path / "forecast_ledger.db"
+    db_path.touch()
+
+    detail = {
+        "market_id": "m1",
+        "checkpoint": "7d",
+        "packet_id": "packet-1",
+        "question": "Question?",
+    }
+
+    evidence = [
+        {
+            "evidence_id": "e1",
+            "position": 1,
+        }
+    ]
+
+    forecasts = [
+        {
+            "condition": "B_direct",
+            "probability_yes": 0.2,
+        }
+    ]
+
+    attempts = {
+        "retrieval": [],
+        "forecasts": [],
+    }
+
+    verifications = [
+        {
+            "position": 1,
+            "accepted": True,
+        }
+    ]
+
+    monkeypatch.setattr(
+        api_module,
+        "load_checkpoint_detail",
+        lambda **_: detail,
+    )
+
+    monkeypatch.setattr(
+        api_module,
+        "load_checkpoint_evidence",
+        lambda **_: evidence,
+    )
+
+    monkeypatch.setattr(
+        api_module,
+        "load_checkpoint_forecast_details",
+        lambda **_: forecasts,
+    )
+
+    monkeypatch.setattr(
+        api_module,
+        "load_checkpoint_attempt_audit",
+        lambda **_: attempts,
+    )
+
+    def load_verifications(
+        *,
+        db_path,
+        packet_id,
+    ):
+        assert packet_id == "packet-1"
+        return verifications
+
+    monkeypatch.setattr(
+        api_module,
+        "load_source_verifications_for_packet",
+        load_verifications,
+    )
+
+    client = TestClient(
+        create_app(db_path)
+    )
+
+    response = client.get(
+        "/api/markets/m1/7d"
+    )
+
+    assert response.status_code == 200
+
+    assert response.json() == {
+        "protocol_version": "v0.2",
+        "market": detail,
+        "evidence": evidence,
+        "forecasts": forecasts,
+        "attempts": attempts,
+        "source_verifications": verifications,
+    }

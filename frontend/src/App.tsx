@@ -9,6 +9,7 @@ import {
   YAxis,
 } from "recharts";
 import "./App.css";
+import MarketDetail from "./MarketDetail";
 
 type Page = "overview" | "results" | "markets" | "audit";
 
@@ -113,6 +114,11 @@ function statusLabel(value: string): string {
 
 export default function App() {
   const [page, setPage] = useState<Page>("overview");
+
+  const [selectedMarket, setSelectedMarket] = useState<{
+    marketId: string;
+    checkpoint: string;
+  } | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [funnel, setFunnel] = useState<Funnel | null>(null);
   const [results, setResults] = useState<ResultsPayload | null>(null);
@@ -220,7 +226,10 @@ export default function App() {
             <button
               key={item}
               className={page === item ? "nav-active" : ""}
-              onClick={() => setPage(item)}
+              onClick={() => {
+                setSelectedMarket(null);
+                setPage(item);
+              }}
               type="button"
             >
               {item[0].toUpperCase() + item.slice(1)}
@@ -229,7 +238,13 @@ export default function App() {
         )}
       </nav>
 
-      {page === "overview" && (
+      {selectedMarket ? (
+        <MarketDetail
+          marketId={selectedMarket.marketId}
+          checkpoint={selectedMarket.checkpoint}
+          onBack={() => setSelectedMarket(null)}
+        />
+      ) : page === "overview" && (
         <>
           <section className="metrics">
             <Metric label="Frozen snapshots" value={funnel.snapshots} />
@@ -442,7 +457,16 @@ export default function App() {
 
                 <tbody>
                   {markets.rows.map((row) => (
-                    <tr key={`${row.market_id}-${row.checkpoint}`}>
+                    <tr
+                      key={`${row.market_id}-${row.checkpoint}`}
+                      className="clickable-row"
+                      onClick={() =>
+                        setSelectedMarket({
+                          marketId: row.market_id,
+                          checkpoint: row.checkpoint,
+                        })
+                      }
+                    >
                       <td>
                         <div className="question">{row.question}</div>
                         <div className="row-meta">{row.market_id}</div>
